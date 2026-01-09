@@ -109,6 +109,13 @@ ${CKPT_ROOT}/
 After placing the files correctly, you can run the setup script again.
 Existing files will be detected and skipped automatically.
 
+## 🤖 Auto Run
+Run the full end-to-end video pipeline with a single command:
+```bash
+python scripts/offline_app.py --input_video <path>
+```
+where the input can be a directory of frames or an .mp4 file. The pipeline automatically detects humans in the initial frame, treats all detected humans as targets, and performs temporally consistent 4D reconstruction over the video.
+
 ## 📝 Citation
 If you find this repository useful, please consider giving a star ⭐ and citation.
 ```
