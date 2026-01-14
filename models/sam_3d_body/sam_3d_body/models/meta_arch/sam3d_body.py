@@ -31,7 +31,6 @@ from .base_model import BaseModel
 
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, smooth_scale_shape_local, ema_smooth_global_rot_per_obj_id_adaptive
 
-
 logger = get_pylogger(__name__)
 
 
@@ -45,6 +44,25 @@ KEY_BODY = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 41, 62]  # key body joints for pr
 KEY_RIGHT_HAND = list(range(21, 42))
 # fmt: on
 
+coco17_to_mhr70 = torch.tensor([
+    0,   # 0  nose
+    1,   # 1  left_eye
+    2,   # 2  right_eye
+    3,   # 3  left_ear
+    4,   # 4  right_ear
+    5,   # 5  left_shoulder
+    6,   # 6  right_shoulder
+    7,   # 7  left_elbow   ✅
+    8,   # 8  right_elbow  ✅
+    62,  # 9  left_wrist
+    41,  # 10 right_wrist
+    9,   # 11 left_hip
+    10,  # 12 right_hip
+    11,  # 13 left_knee
+    12,  # 14 right_knee
+    13,  # 15 left_ankle
+    14,  # 16 right_ankle
+], dtype=torch.long)
 
 class SAM3DBody(BaseModel):
     pelvis_idx = [9, 10]  # left_hip, right_hip
@@ -1125,39 +1143,43 @@ class SAM3DBody(BaseModel):
         if kps_batch is None or len(kps_batch) == 0:
             keypoints_prompt = torch.zeros((batch_size * num_person, 1, 3)).to(batch["img"])
             keypoints_prompt[:, :, -1] = -2
-        else:   # for 3dpw evaluation (kp from preprocessed data)
-            Height = batch['ori_img_size'][0,0][0].item()
-            Width = batch['ori_img_size'][0,0][1].item()
+        else:
+            # for 3dpw/emdb/rich evaluation (kp from preprocessed data, as other hmr methods)
+
+            Height = batch['ori_img_size'][0,0][0].item()   # width
+            Width = batch['ori_img_size'][0,0][1].item()    # height
             keypoints_prompt = np.stack(kps_batch, axis=0)                          # (N, M, 17, 3)
             keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])  # torch.Size([N, M, 17, 3])
             keypoints_prompt = keypoints_prompt.reshape(-1, 17, 3)
-            # keypoints_prompt = keypoints_prompt / torch.tensor([Height, Width, 1.0], device=keypoints_prompt.device, dtype=keypoints_prompt.dtype)
-            # Remove negative values by shifting each channel
-            # If a channel has values < 0, subtract its minimum so that the new minimum becomes 0
-            min_per_channel = keypoints_prompt.amin(
-                dim=tuple(range(keypoints_prompt.ndim - 1)),
-                keepdim=True
-            )
-            # Only shift channels whose minimum is below 0
-            shift = torch.clamp(min_per_channel, max=0.0)
-            keypoints_prompt = keypoints_prompt - shift
-            # Original normalization by physical scale
-            # Typically: x / Width, y / Height, confidence unchanged
-            keypoints_prompt = keypoints_prompt / torch.tensor(
-                [Height, Width, 1.0],
-                device=keypoints_prompt.device,
-                dtype=keypoints_prompt.dtype
-            )
-            # Safety normalization
-            # If any channel is still > 1 after normalization,
-            # divide that channel by its maximum value
-            max_per_channel = keypoints_prompt.amax(
-                dim=tuple(range(keypoints_prompt.ndim - 1)),
-                keepdim=True
-            )
-            # Channels with max <= 1 remain unchanged
-            scale = torch.clamp(max_per_channel, min=1.0)
-            keypoints_prompt = keypoints_prompt / scale
+            keypoints_prompt[:, :, 2] = coco17_to_mhr70.unsqueeze(0).expand(keypoints_prompt.size(0), -1)
+            keypoints_prompt = keypoints_prompt[:, 5:, :]
+            keypoints_prompt = keypoints_prompt / torch.tensor([Height, Width, 1.0], device=keypoints_prompt.device, dtype=keypoints_prompt.dtype)  # x/width, y/height
+            # # Remove negative values by shifting each channel
+            # # If a channel has values < 0, subtract its minimum so that the new minimum becomes 0
+            # min_per_channel = keypoints_prompt.amin(
+            #     dim=tuple(range(keypoints_prompt.ndim - 1)),
+            #     keepdim=True
+            # )
+            # # Only shift channels whose minimum is below 0
+            # shift = torch.clamp(min_per_channel, max=0.0)
+            # keypoints_prompt = keypoints_prompt - shift
+            # # Original normalization by physical scale
+            # # Typically: x / Width, y / Height, confidence unchanged
+            # keypoints_prompt = keypoints_prompt / torch.tensor(
+            #     [Height, Width, 1.0],
+            #     device=keypoints_prompt.device,
+            #     dtype=keypoints_prompt.dtype
+            # )
+            # # Safety normalization
+            # # If any channel is still > 1 after normalization,
+            # # divide that channel by its maximum value
+            # max_per_channel = keypoints_prompt.amax(
+            #     dim=tuple(range(keypoints_prompt.ndim - 1)),
+            #     keepdim=True
+            # )
+            # # Channels with max <= 1 remain unchanged
+            # scale = torch.clamp(max_per_channel, min=1.0)
+            # keypoints_prompt = keypoints_prompt / scale
 
         # Forward promptable decoder to get updated pose tokens and regression output
         pose_output, pose_output_hand = None, None
@@ -2173,52 +2195,52 @@ class SAM3DBody(BaseModel):
             #     # kalman_cfg=kalman_cfg,
             # )
 
-            pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
-                mhr_dict=pose_output["mhr"],
-                num_frames=len(img_list),
-                frame_obj_ids=id_batch,
-                keys_to_smooth=["body_pose", "hand"],
-                kalman_cfg=None,
-                vis_flags=occ_dict
-            )
-
-            # -----------------
-            # keep shape & scale same as the first frame
-            num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
-            scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
-            shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
-            B, D_scale = scale.shape
-            _, D_shape = shape.shape
-            num_frames = len(img_list)
-            # Reshape to (T, N, D) so that we can index by (frame, human)
-            scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
-            shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
-            # For each human id, use its scale/shape from the first frame (t=0)
-            # and assign it to all frames for that human.
-            for hid in range(num_human):
-                # (28,) and (45,), values at t=0 for this human
-                if hid not in mhr_shape_scale_dict:
-                    mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
-                    first_scale = scale_3d[0, hid].clone()
-                    first_shape = shape_3d[0, hid].clone()
-                else:
-                    first_scale, first_shape = mhr_shape_scale_dict[hid]
-                # Broadcast to all time steps for this human
-                scale_3d[:, hid, :] = first_scale
-                shape_3d[:, hid, :] = first_shape
-            # Back to original shape: (B, D)
-            pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
-            pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
+            # pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+            #     mhr_dict=pose_output["mhr"],
+            #     num_frames=len(img_list),
+            #     frame_obj_ids=id_batch,
+            #     keys_to_smooth=["body_pose", "hand"],
+            #     kalman_cfg=None,
+            #     vis_flags=occ_dict
+            # )
 
             # # -----------------
-            # # smooth global rot
-            pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
-                mhr_dict=pose_output["mhr"],
-                num_frames=len(img_list),
-                frame_obj_ids=id_batch,
-                vis_flags=occ_dict,
-                key_name="global_rot",
-            )
+            # # keep shape & scale same as the first frame
+            # num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
+            # scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
+            # shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
+            # B, D_scale = scale.shape
+            # _, D_shape = shape.shape
+            # num_frames = len(img_list)
+            # # Reshape to (T, N, D) so that we can index by (frame, human)
+            # scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
+            # shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
+            # # For each human id, use its scale/shape from the first frame (t=0)
+            # # and assign it to all frames for that human.
+            # for hid in range(num_human):
+            #     # (28,) and (45,), values at t=0 for this human
+            #     if hid not in mhr_shape_scale_dict:
+            #         mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
+            #         first_scale = scale_3d[0, hid].clone()
+            #         first_shape = shape_3d[0, hid].clone()
+            #     else:
+            #         first_scale, first_shape = mhr_shape_scale_dict[hid]
+            #     # Broadcast to all time steps for this human
+            #     scale_3d[:, hid, :] = first_scale
+            #     shape_3d[:, hid, :] = first_shape
+            # # Back to original shape: (B, D)
+            # pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
+            # pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
+
+            # # # -----------------
+            # # # smooth global rot
+            # pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
+            #     mhr_dict=pose_output["mhr"],
+            #     num_frames=len(img_list),
+            #     frame_obj_ids=id_batch,
+            #     vis_flags=occ_dict,
+            #     key_name="global_rot",
+            # )
 
             verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
                 self.head_pose.mhr_forward(

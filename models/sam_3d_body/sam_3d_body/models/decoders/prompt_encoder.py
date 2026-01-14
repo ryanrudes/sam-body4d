@@ -179,6 +179,15 @@ class PromptEncoder(nn.Module):
         if keypoints is not None:
             coords = keypoints[:, :, :2]
             labels = keypoints[:, :, -1]
+            
+            # Identify invalid keypoints: x <= 0 or y <= 0 or x >= 1 or y >= 1
+            invalid = (coords <= 0).any(dim=-1) | (coords >= 1).any(dim=-1)
+            # invalid: (N, 17), boolean mask
+            # Set labels of invalid keypoints to -2
+            labels[invalid] = -2
+            # Set coordinates of invalid keypoints to (0, 0)
+            coords[invalid] = 0
+
             point_embeddings, point_mask = self._embed_keypoints(
                 coords, labels
             )  # pad=(boxes is None))

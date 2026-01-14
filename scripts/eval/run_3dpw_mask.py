@@ -6,12 +6,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
 
 # from offline_app import inference configs
-from offline_app import *
+from offline_app_mask import *
 
 
 def inference(args):
     # init configs and cover with cmd options
-    predictor = offline_app(refine_occlusion=args.refine_occlusion)
+    predictor = OfflineApp()
 
     # init data
     test_seq_name_list = glob.glob(os.path.join(args.data_dir, 'sequenceFiles', 'test', '*'))
@@ -65,7 +65,7 @@ def inference(args):
         # 4. hmr upon masks
 
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation()
+            predictor.on_4d_generation(frame_list)
 
 
 if __name__ == "__main__":

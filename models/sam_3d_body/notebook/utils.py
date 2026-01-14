@@ -384,7 +384,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
     return outputs, id_batch, empty_frame_list
 
 
-def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None):
+def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, flip=False):
     """
     Process image with external mask input.
 
@@ -433,6 +433,6 @@ def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_di
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch)   # use_mask=False default
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch, flip=flip)   # use_mask=False default
 
     return outputs, id_batch, empty_frame_list

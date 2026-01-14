@@ -18,6 +18,7 @@ from sam_3d_body.data.utils.io import load_image
 from sam_3d_body.data.utils.prepare_batch import prepare_batch
 from sam_3d_body.utils import recursive_to
 from torchvision.transforms import ToTensor
+# from vis_kps import draw_points_with_indices
 
 
 class SAM3DBodyEstimator:
@@ -79,6 +80,7 @@ class SAM3DBodyEstimator:
         mhr_shape_scale_dict=None, 
         occ_dict=None, 
         kps_batch=None, 
+        flip=False,
     ):
         """
         Perform model prediction in top-down format: assuming input is a full image.
@@ -113,10 +115,18 @@ class SAM3DBodyEstimator:
                 print("####### Please make sure the input image is in RGB format")
                 image_format = "rgb"
             height, width = img.shape[:2]
+
+            if flip:
+                img = img[:, ::-1]
+
             image_list.append(img)
 
             if bboxes[i] is not None:
                 boxes = bboxes[i].reshape(-1, 4)
+                if flip:
+                    tmp = boxes.copy()
+                    boxes[:, 0] = width - tmp[:, 2] - 1
+                    boxes[:, 2] = width - tmp[:, 0] - 1
                 self.is_crop = True
             elif self.detector is not None:
                 if image_format == "rgb":
@@ -239,6 +249,11 @@ class SAM3DBodyEstimator:
         #################### Run model inference on an image ####################
         batch_dict = recursive_to(batch_dict, "cuda")
         self.model._initialize_batch(batch_dict)
+
+        if kps_batch is not None and flip:
+            for b_idx in range(len(kps_batch)):
+                tmp = kps_batch[b_idx].copy()
+                kps_batch[b_idx][:, :, 0] = width - tmp[:, :, 0] - 1
 
         outputs = self.model.run_inference_batch(
             image_list,
@@ -445,7 +460,7 @@ class SAM3DBodyEstimator:
             cam_int = cam_int.to(batch["img"])
             batch["cam_int"] = cam_int.clone()
         elif self.fov_estimator is not None:
-            print("Running FOV estimator ...")
+            # print("Running FOV estimator ...")
             input_image = batch["img_ori"][0].data
             cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
                 batch["img"]

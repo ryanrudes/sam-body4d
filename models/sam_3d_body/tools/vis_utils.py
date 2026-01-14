@@ -41,7 +41,7 @@ def visualize_sample(img_cv2, outputs, faces, id_current):
 def visualize_sample_together(img_cv2, outputs, faces, id_current):
 	# Render everything together
 	img_mesh = img_cv2.copy()
-	img_mesh = np.ones_like(img_mesh) * 255
+	# img_mesh = np.ones_like(img_mesh) * 255
 
 	if outputs is None:
 		return img_mesh
