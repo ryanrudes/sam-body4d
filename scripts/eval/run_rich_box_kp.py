@@ -20,6 +20,7 @@ def inference(args):
     labels = torch.load(rich_dir / "rich_test_labels.pt", weights_only=False)
     preproc_data = torch.load(rich_dir / "rich_test_preproc.pt", weights_only=False)
     vids = list(labels.keys())
+    vids.sort()
 
     # inference
     for seq in tqdm(vids):
@@ -29,6 +30,13 @@ def inference(args):
         frame_list = [f"{args.data_dir}/{seq}/{fi:05d}_{seq_id}.jpeg" for fi in frame_list]
         frame_list.sort()
         
+        if not os.path.exists(frame_list[0]):
+        # if True:
+            print(frame_list[0] + " does not exist")
+            frame_file_list = glob.glob(f"{args.data_dir}/{seq}/*.jpeg")
+            frame_file_list.sort()
+            frame_list = [frame_file_list[i-1] for i in labels[seq]['frame_id'].tolist()]
+
         bbx_xys = preproc_data[seq]['bbx_xys']
         bboxes = torch.cat(
             [bbx_xys[:, :2] - bbx_xys[:, 2:3] / 2,
