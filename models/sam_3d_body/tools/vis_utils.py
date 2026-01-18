@@ -84,7 +84,7 @@ def visualize_sample_together(img_cv2, outputs, faces, id_current):
 		return img_mesh
 	# img_mesh = np.ones_like(img_mesh) * 255
 
-	return draw_keypoints_with_index(img_mesh, outputs[0]['pred_keypoints_2d'])
+	# return draw_keypoints_with_index(img_mesh, outputs[0]['pred_keypoints_2d'])
 	
 	if outputs is None:
 		return img_mesh

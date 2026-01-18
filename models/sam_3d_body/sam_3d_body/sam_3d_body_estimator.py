@@ -108,6 +108,7 @@ class SAM3DBodyEstimator:
         self.prev_prompt = []
         batch_list = []
         image_list =[]
+        kps_list = []
         for i, img in enumerate(img_list):
             if type(img) == str:
                 img = load_image(img, backend="cv2", image_format="bgr")
@@ -205,7 +206,11 @@ class SAM3DBodyEstimator:
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com
 
-            batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict)
+            batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict, kps=kps_batch[i])
+            try:
+                kps_list.append(batch['keypoints_2d'].numpy())
+            except:
+                pass
 
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
@@ -259,6 +264,9 @@ class SAM3DBodyEstimator:
                 tmp = kps_batch[b_idx].copy()
                 kps_batch[b_idx][:, :, 0] = width - tmp[:, :, 0] - 1
 
+        if kps_batch is None:
+            kps_list = None
+
         outputs = self.model.run_inference_batch(
             image_list,
             batch_dict,
@@ -270,7 +278,7 @@ class SAM3DBodyEstimator:
             mhr_shape_scale_dict=mhr_shape_scale_dict,
             id_batch=id_batch,
             occ_dict=occ_dict,
-            kps_batch=kps_batch,
+            kps_batch=kps_list,
             kps_id=kps_id,
         )
         if inference_type == "full":

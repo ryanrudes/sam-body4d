@@ -27,7 +27,7 @@ from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
 
-from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, gpu_profile, resize_mask_with_unique_label
+from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, gpu_profile, resize_mask_with_unique_label, mask_png_to_bbox_xyxy
 
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
 from models.sam_3d_body.notebook.utils import process_image_with_mask, save_mesh_results, process_image_with_bbox
@@ -750,11 +750,14 @@ def on_4d_generation(video_path: str):
         # Process with external mask
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
         
-        # # for completed frames (33)
-        # if len(batch_images) == 64:
-        #     batch_kps = [np.load("1.npy")]
-        #     mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[33]], [batch_masks[33]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [33])
-        #     mask_outputs[33] = mask_outputs_[0]
+        # for completed frames (33)
+        if len(batch_images) < 64:
+            batch_kps = [torch.from_numpy(np.load("1.npy")).unsqueeze(0)]
+            bbox = mask_png_to_bbox_xyxy("/root/projects/sam-body4d/outputs/20260118_195759_383_cb108cb4/completion/TA42/masks/00000000.png", obj_id = 1)
+            # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]})
+            # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps)
+            mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[0]], [batch_masks[0]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [0])
+            mask_outputs[0] = mask_outputs_[0]
 
         num_empth_ids = 0
         for frame_id in range(len(batch_images)):

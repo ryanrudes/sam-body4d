@@ -9,6 +9,65 @@ class NoCollate:
     def __init__(self, data):
         self.data = data
 
+from PIL import Image
+
+def save_tensor_as_jpg(tensor, path):
+    """
+    tensor: torch.Size([1, 1, 3, H, W]), value in [0,1]
+    """
+    assert isinstance(tensor, torch.Tensor)
+
+    img = tensor[0, 0]              # -> [3, H, W]
+    img = img.clamp(0, 1)
+    img = (img * 255).byte()        # uint8
+    img = img.permute(1, 2, 0)      # [H, W, 3]
+    img = img.cpu().numpy()
+
+    Image.fromarray(img).save(path, quality=95)
+
+import cv2
+
+def draw_and_save_keypoints(img_tensor, keypoints, save_path="point.jpg",
+                            radius=4, thickness=2):
+    """
+    img_tensor: torch.Tensor, shape (1, 3, H, W)
+    keypoints: (17, 2), xy format, torch.Tensor or np.ndarray
+    save_path: output image path
+    """
+
+    # ---- image ----
+    img = img_tensor[0].permute(1, 2, 0).detach().cpu().numpy()
+    if img.max() <= 1.0:
+        img = (img * 255).astype(np.uint8)
+    else:
+        img = img.astype(np.uint8)
+
+    img = img.copy()
+
+    # ---- keypoints ----
+    if isinstance(keypoints, torch.Tensor):
+        keypoints = keypoints.detach().cpu().numpy()
+
+    # ---- draw ----
+    for i, (x, y) in enumerate(keypoints):
+        x, y = int(round(x)), int(round(y))
+
+        if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
+            cv2.circle(img, (x, y), radius, (0, 255, 0), -1)
+            cv2.putText(
+                img,
+                str(i),
+                (x + 5, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 0, 0),
+                thickness,
+                cv2.LINE_AA,
+            )
+
+    # ---- save ----
+    cv2.imwrite(save_path, img)
+
 
 def prepare_batch(
     img,
@@ -16,6 +75,7 @@ def prepare_batch(
     boxes,
     masks=None,
     masks_score=None,
+    kps=None,
     cam_int=None,
     img_com_dict=None,  # optional dict of complementary images for each box index
 ):
@@ -31,6 +91,12 @@ def prepare_batch(
             data_info = dict(img=img)
         data_info["bbox"] = boxes[idx]  # shape (4,)
         data_info["bbox_format"] = "xyxy"
+
+        if kps is not None:
+            if kps[idx].shape[-1] == 3:
+                data_info["keypoints_2d"] = kps[idx][:,:2]
+            else:    
+                data_info["keypoints_2d"] = kps[idx]
 
         if masks is not None:
             data_info["mask"] = masks[idx].copy()

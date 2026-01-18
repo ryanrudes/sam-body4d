@@ -18,6 +18,8 @@ from .bbox_utils import (
     get_warp_matrix,
 )
 
+from .kp_utils import warp_keypoints_like_image_rgbmarker, save_keypoints_with_index
+
 
 class Compose:
     """Compose multiple transforms sequentially.
@@ -255,6 +257,8 @@ class TopdownAffine(nn.Module):
         w, h = self.input_size
         warp_size = (int(w), int(h))
 
+        # img0 = results["img"] if isinstance(results.get("img", None), np.ndarray) else None
+
         # expand bbox to fixed aspect ratio
         results["orig_bbox_scale"] = results["bbox_scale"].copy()
         if self.fix_square and results["bbox_scale"][0] == results["bbox_scale"][1]:
@@ -315,6 +319,26 @@ class TopdownAffine(nn.Module):
                 results["keypoints_2d"][None, :, :2], warp_mat
             )[0]
             results["keypoints_2d"] = transformed_keypoints
+
+        # if results.get("keypoints_2d", None) is not None:
+        #     results["orig_keypoints_2d"] = results["keypoints_2d"].copy()
+        #     transformed_keypoints = results["keypoints_2d"].copy()
+
+        #     kp_warp, kp_conf = warp_keypoints_like_image_rgbmarker(
+        #         img=img0,
+        #         keypoints_xy=results["orig_keypoints_2d"][:, :2],
+        #         warp_mat=warp_mat,
+        #         out_w=w, out_h=h,
+        #         sigma=2.0,
+        #         radius=8,
+        #         window=9,
+        #         seed=0,
+        #         return_debug=False,
+        #     )
+
+        #     transformed_keypoints[:, :2] = kp_warp
+        #     results["keypoints_2d"] = transformed_keypoints
+        #     results["keypoints_2d_conf"] = kp_conf  # 你想用就用
 
         if results.get("mask", None) is not None:
             results["mask"] = cv2.warpAffine(

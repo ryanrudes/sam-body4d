@@ -337,7 +337,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                     # print(f"Computed bbox from mask: {bbox[0]}")
                     bbox_list.append(bbox)
                     if batch_kps is not None:
-                        kp_list.append(batch_kps[obj_id-1])  # N x 3
+                        kp_list.append(batch_kps[obj_id-1][i])  # N x 3
                     continue
             
             zero_mask = np.zeros_like(mask)
@@ -368,7 +368,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             # print(f"Computed bbox from mask: {bbox[0]}")
             bbox_list.append(bbox)
             if batch_kps is not None:
-                kp_list.append(batch_kps[obj_id-1])  # N x 3
+                kp_list.append(batch_kps[obj_id-1][i])  # N x 3
 
 
         if len(bbox_list) == 0:
@@ -391,6 +391,8 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
+    if batch_kps is None:
+        kps_batch = None
     outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=kps_batch, occ_dict=occ_dict, use_mask=True, kps_id=kps_id)
 
     return outputs, id_batch, empty_frame_list

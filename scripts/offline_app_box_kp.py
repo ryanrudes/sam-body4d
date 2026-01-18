@@ -347,28 +347,29 @@ class offline_app:
                 else:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
-                # img = cv2.imread(image_path)
                 
-                # rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                img = cv2.imread(image_path)
+                
+                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
 
-                # out = rend_img.copy()
+                out = rend_img.copy()
 
-                # for boxi in range(len(mask_output)):
-                #     x1, y1, x2, y2 = batch_boxes[boxi][frame_id]
-                #     out = out.copy()
-                #     color = [(0, 165, 255), (0, 255, 255)][boxi]
-                #     cv2.rectangle(
-                #         out,
-                #         (int(x1.item()), int(y1.item())),
-                #         (int(x2.item()), int(y2.item())),
-                #         color=color,  # BGR
-                #         thickness=3
-                #     )
+                for boxi in range(len(mask_output)):
+                    x1, y1, x2, y2 = batch_boxes[boxi][frame_id]
+                    out = out.copy()
+                    color = [(0, 165, 255), (0, 255, 255)][boxi]
+                    cv2.rectangle(
+                        out,
+                        (int(x1.item()), int(y1.item())),
+                        (int(x2.item()), int(y2.item())),
+                        color=color,  # BGR
+                        thickness=3
+                    )
 
-                # cv2.imwrite(
-                #     f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                #     out.astype(np.uint8),
-                # )
+                cv2.imwrite(
+                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                    out.astype(np.uint8),
+                )
 
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)
