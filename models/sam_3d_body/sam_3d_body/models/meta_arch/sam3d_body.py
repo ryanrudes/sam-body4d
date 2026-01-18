@@ -1149,10 +1149,19 @@ class SAM3DBody(BaseModel):
             Height = batch['ori_img_size'][0,0][0].item()   # width
             Width = batch['ori_img_size'][0,0][1].item()    # height
             keypoints_prompt = np.stack(kps_batch, axis=0)                          # (N, M, 17, 3)
+            # keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])  # torch.Size([N, M, 17, 3])
             keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])  # torch.Size([N, M, 17, 3])
-            keypoints_prompt = keypoints_prompt.reshape(-1, 17, 3)
-            keypoints_prompt[:, :, 2] = coco17_to_mhr70.unsqueeze(0).expand(keypoints_prompt.size(0), -1)
-            keypoints_prompt = keypoints_prompt[:, 5:, :]
+            # keypoints_prompt = keypoints_prompt.reshape(-1, 17, 3)
+            keypoints_prompt = keypoints_prompt.reshape(-1, 70, 2)
+            keypoints_prompt = keypoints_prompt[:, KEY_BODY]
+            # keypoints_prompt[:, :, 2] = coco17_to_mhr70.unsqueeze(0).expand(keypoints_prompt.size(0), -1)
+            # keypoints_prompt = keypoints_prompt[:, 5:, :]
+            keypoints_prompt = torch.cat(
+                [keypoints_prompt,
+                 torch.tensor(KEY_BODY, device=keypoints_prompt.device)[None, :, None].expand(keypoints_prompt.shape[0], -1, 1)],
+                # torch.arange(70, device=keypoints_prompt.device)[None, :, None].expand(keypoints_prompt.shape[0], -1, 1)],
+                dim=2
+            )
             keypoints_prompt = keypoints_prompt / torch.tensor([Height, Width, 1.0], device=keypoints_prompt.device, dtype=keypoints_prompt.dtype)  # x/width, y/height
             # # Remove negative values by shifting each channel
             # # If a channel has values < 0, subtract its minimum so that the new minimum becomes 0
@@ -1723,6 +1732,7 @@ class SAM3DBody(BaseModel):
         id_batch=None,
         occ_dict=None,
         kps_batch=None,
+        kps_id=None,
     ):
         """
         Run 3DB inference (optionally with hand detector).
@@ -1770,7 +1780,10 @@ class SAM3DBody(BaseModel):
             img_com_dict = {}
             for idx_k, (idx_start,idx_end) in idx_dict.items():
                 if idx_img >= idx_start and idx_img < idx_end:
-                    img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{idx_img:08d}.jpg"), backend="cv2", image_format="bgr")
+                    if kps_id is not None:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{kps_id[0]:08d}.jpg"), backend="cv2", image_format="bgr")
+                    else:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{idx_img:08d}.jpg"), backend="cv2", image_format="bgr")
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com[:, ::-1]
 
@@ -1836,7 +1849,10 @@ class SAM3DBody(BaseModel):
             img_com_dict = {}
             for idx_k, (idx_start,idx_end) in idx_dict.items():
                 if idx_img >= idx_start and idx_img < idx_end:
-                    img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{idx_img:08d}.jpg"), backend="cv2", image_format="bgr")
+                    if kps_id is not None:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{kps_id[0]:08d}.jpg"), backend="cv2", image_format="bgr")
+                    else:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{idx_img:08d}.jpg"), backend="cv2", image_format="bgr")
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com[:, ::-1]
 

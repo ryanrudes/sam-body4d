@@ -34,7 +34,7 @@ class MetricMocap:
         self.faces_smpl = self.smpl["male"].faces
 
     # ================== Batch-based Computation  ================== #
-    def evaluate(self, outputs, batch, mhr_height, smplx_vertices):
+    def evaluate(self, outputs, batch, mhr_height, smplx_vertices, save_path=None, smplx=None):
         """The behaviour is the same for val/test/predict"""
         dataset_id = batch["meta"]["dataset_id"]
         if dataset_id != "3DPW":
@@ -64,7 +64,22 @@ class MetricMocap:
         target_c_j3d = torch.matmul(self.J_regressor, target_c_verts)
 
         # + Prediction -> Metric
-        smpl_out = self.smplx(**outputs)
+        if smplx is not None:
+            B = outputs["global_orient"].shape[0]
+            # 1. 先保证你已有的都是 contiguous
+            outputs = {k: v.contiguous() for k, v in outputs.items()}
+            # 2. 自动把 smplx 里存在、但 outputs 里没传的 tensor buffer 补进来
+            for k in dir(smplx):
+                if k.startswith("_"):
+                    continue
+                if k in outputs:
+                    continue
+                v = getattr(smplx, k)
+                if hasattr(v, "shape") and v.shape[0] == 1:
+                    outputs[k] = v.expand(B, *v.shape[1:]).contiguous()
+            smpl_out = smplx(**outputs)
+        else:
+            smpl_out = self.smplx(**outputs)
         pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
         # pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smplx_vertices])
         pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
@@ -104,20 +119,17 @@ class MetricMocap:
         avg = camcoord_metrics['pa_mpjpe'].mean()
         print(f"{vid}: {avg}")
 
-        # import csv
-        # csv_path = "nosmooth.csv"
-
-        # mode = "a" if os.path.exists(csv_path) else "w"
-
-        # with open(csv_path, mode, newline="", encoding="utf-8") as f:
-        #     writer = csv.writer(f)
-        #     writer.writerow([vid] + list(camcoord_metrics['pa_mpjpe']))
-        
-        # mode = "a" if os.path.exists(csv_path) else "w"
-
-        # with open(csv_path, mode, newline="", encoding="utf-8") as f:
-        #     writer = csv.writer(f)
-        #     writer.writerow([vid] + list(camcoord_metrics['pve']))
+        if save_path is not None:
+            import csv
+            mode = "a" if os.path.exists(save_path) else "w"
+            with open(save_path, mode, newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([vid] + list(camcoord_metrics['pa_mpjpe']))
+            
+            mode = "a" if os.path.exists(save_path) else "w"
+            with open(save_path, mode, newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([vid] + list(camcoord_metrics['pve']))
 
         metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items()}
         print(metrics_avg)

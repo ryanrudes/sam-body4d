@@ -288,7 +288,7 @@ def display_results_grid(
     plt.show()
 
 
-def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict):
+def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, kps_id=None):
     """
     Process image with external mask input.
 
@@ -299,6 +299,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
     image_batch = []
     bbox_batch = []
     mask_batch = []
+    kps_batch = []
     n = len(image_path)
     id_batch = []
     empty_frame_list = []
@@ -310,13 +311,17 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
 
         mask_list = []
         bbox_list = []
+        kp_list = []
         id_current = []
         for obj_id in obj_ids:
 
             if obj_id in idx_dict:
                 start, end = idx_dict[obj_id]
                 if i >= start and i < end:
-                    mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{i:08d}.png")).convert('P')) 
+                    if kps_id is not None:
+                        mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{kps_id[0]:08d}.png")).convert('P'))     
+                    else:
+                        mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{i:08d}.png")).convert('P')) 
                     zero_mask = np.zeros_like(mask_com)
                     zero_mask[mask_com==obj_id] = 255
                     mask_binary = zero_mask.astype(np.uint8)
@@ -331,6 +336,8 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                     bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
                     # print(f"Computed bbox from mask: {bbox[0]}")
                     bbox_list.append(bbox)
+                    if batch_kps is not None:
+                        kp_list.append(batch_kps[obj_id-1])  # N x 3
                     continue
             
             zero_mask = np.zeros_like(mask)
@@ -360,6 +367,9 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
 
             # print(f"Computed bbox from mask: {bbox[0]}")
             bbox_list.append(bbox)
+            if batch_kps is not None:
+                kp_list.append(batch_kps[obj_id-1])  # N x 3
+
 
         if len(bbox_list) == 0:
             empty_frame_list.append(i)
@@ -367,6 +377,8 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
 
         id_batch.append(id_current)
         bbox = np.stack(bbox_list, axis=0)  # TODO: sometimes empty
+        if batch_kps is not None:
+            kps_batch.append(np.stack(kp_list, axis=0))
         mask_binary = np.stack(mask_list, axis=0)
         # Process with external mask and computed bbox
         # Note: The mask needs to match the number of bboxes (1 bbox -> 1 mask)
@@ -379,7 +391,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True)
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=kps_batch, occ_dict=occ_dict, use_mask=True, kps_id=kps_id)
 
     return outputs, id_batch, empty_frame_list
 

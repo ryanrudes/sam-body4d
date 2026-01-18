@@ -81,6 +81,7 @@ class SAM3DBodyEstimator:
         occ_dict=None, 
         kps_batch=None, 
         flip=False,
+        kps_id=None,
     ):
         """
         Perform model prediction in top-down format: assuming input is a full image.
@@ -197,7 +198,10 @@ class SAM3DBodyEstimator:
             img_com_dict = {}
             for idx_k, (idx_start,idx_end) in idx_dict.items():
                 if i >= idx_start and i < idx_end:
-                    img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{i:08d}.jpg"), backend="cv2", image_format="bgr")
+                    if kps_id is not None:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{kps_id[0]:08d}.jpg"), backend="cv2", image_format="bgr")
+                    else:
+                        img_com = load_image(os.path.join(idx_path[idx_k]['images'], f"{i:08d}.jpg"), backend="cv2", image_format="bgr")
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com
 
@@ -267,6 +271,7 @@ class SAM3DBodyEstimator:
             id_batch=id_batch,
             occ_dict=occ_dict,
             kps_batch=kps_batch,
+            kps_id=kps_id,
         )
         if inference_type == "full":
             pose_output, batch_lhand, batch_rhand, _, _ = outputs

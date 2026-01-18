@@ -30,7 +30,7 @@ from omegaconf import OmegaConf
 from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, gpu_profile, resize_mask_with_unique_label
 
 from models.sam_3d_body.sam_3d_body import load_sam_3d_body, SAM3DBodyEstimator
-from models.sam_3d_body.notebook.utils import process_image_with_mask, save_mesh_results
+from models.sam_3d_body.notebook.utils import process_image_with_mask, save_mesh_results, process_image_with_bbox
 from models.sam_3d_body.tools.vis_utils import visualize_sample_together, visualize_sample
 from models.diffusion_vas.demo import init_amodal_segmentation_model, init_rgb_model, init_depth_model, load_and_transform_masks, load_and_transform_rgbs, rgb_to_depth
 
@@ -478,6 +478,43 @@ def on_mask_generation(video_path: str):
 
     return out_video_path
 
+def draw_keypoints_with_index(
+    image: np.ndarray,
+    keypoints,  # np.ndarray or torch.Tensor, (N,2)
+    radius: int = 3,
+    point_color=(0, 255, 0),
+    text_color=(255, 255, 255),
+    text_scale: float = 0.4,
+    text_thickness: int = 1,
+    offset=(5, -5),
+) -> np.ndarray:
+    out = image.copy()
+    H, W = out.shape[:2]
+
+    # accept numpy or torch, normalize to numpy float32
+    if isinstance(keypoints, torch.Tensor):
+        kps = keypoints.detach().cpu().float().numpy()
+    else:
+        kps = np.asarray(keypoints, dtype=np.float32)
+
+    if kps.ndim != 2 or kps.shape[1] != 2:
+        raise ValueError(f"keypoints must be (N,2), got {kps.shape}")
+
+    for i, (x, y) in enumerate(kps):
+        if not np.isfinite(x) or not np.isfinite(y):
+            continue
+        xi, yi = int(round(float(x))), int(round(float(y)))
+        if 0 <= xi < W and 0 <= yi < H:
+            cv2.circle(out, (xi, yi), radius, point_color, -1, cv2.LINE_AA)
+            cv2.putText(
+                out, str(i),
+                (xi + offset[0], yi + offset[1]),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                text_scale, text_color, text_thickness,
+                cv2.LINE_AA,
+            )
+
+    return out
 
 def on_4d_generation(video_path: str):
     """
@@ -713,6 +750,12 @@ def on_4d_generation(video_path: str):
         # Process with external mask
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
         
+        # # for completed frames (33)
+        # if len(batch_images) == 64:
+        #     batch_kps = [np.load("1.npy")]
+        #     mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[33]], [batch_masks[33]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [33])
+        #     mask_outputs[33] = mask_outputs_[0]
+
         num_empth_ids = 0
         for frame_id in range(len(batch_images)):
             image_path = batch_images[frame_id]

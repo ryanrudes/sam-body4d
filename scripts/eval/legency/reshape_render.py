@@ -15,7 +15,7 @@ sys.path.append(os.path.join(current_dir, 'eval_utils'))
 
 from eval.eval_utils.dataset_3dpw import ThreedpwSmplFullSeqDataset
 
-result_root = "results/hmr/3DPW-box-real"
+result_root = "/home/data/hmq/results/hmr/3DPW-box-kp-real05"
 # os.makedirs(save_root, exist_ok=True)
 
 # init dataset and metric evaluator

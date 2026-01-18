@@ -1,129 +1,42 @@
 import os, glob, sys
+import argparse
 import torch
-import smplx
 
 import numpy as np
 from tqdm import tqdm
 from typing import Dict
 
+from pathlib import Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
-sys.path.append(os.path.join(os.path.dirname(current_dir), 'mhr_smpl_conversion'))
-sys.path.append(os.path.join(current_dir, 'eval_utils'))
-
-from mhr_smpl_conversion.mhr.mhr import MHR
-from mhr_smpl_conversion.conversion import Conversion
-from pathlib import Path
-
-from mhr_smpl_conversion.smpl2obj import smpl2obj
-
-from eval_utils.dataset_3dpw import ThreedpwSmplFullSeqDataset
-from eval_utils.metric_3dpw import MetricMocap
-from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
-from eval_utils.std import suppress_stdout_stderr
-# from eval.flip_mhr import decode_joint_params
-
-from eval_utils.smooth import smpl_to_smpl_decode_o6dp
-from eval.eval_utils.smooth_utils.geometry import (
-    rot6d_to_rotation_matrix,
-    smooth_with_savgol,
-    axis_angle_to_rotation_matrix,
-    rotation_matrix_to_rot6d,
-    rotation_matrix_to_axis_angle,
-    smooth_with_slerp,
-)
-
-
-def dict_numpy_to_torch(
-    x: Dict[str, object],
-    *,
-    device=None,
-    dtype_map=None,
-) -> Dict[str, torch.Tensor]:
-    out: Dict[str, torch.Tensor] = {}
-
-    for k, v in x.items():
-        # ndarray
-        if isinstance(v, np.ndarray):
-            t = torch.from_numpy(v)
-            if dtype_map and v.dtype in dtype_map:
-                t = t.to(dtype=dtype_map[v.dtype])
-
-        # numpy scalar: np.float32 / np.int64 / np.float_
-        elif isinstance(v, np.generic):
-            t = torch.tensor(v)   # 0-dim tensor
-            if dtype_map and v.dtype in dtype_map:
-                t = t.to(dtype=dtype_map[v.dtype])
-
-        else:
-            raise TypeError(
-                f"Key '{k}': unsupported type {type(v)}, expected np.ndarray or np.generic"
-            )
-
-        if device is not None:
-            t = t.to(device)
-
-        out[k] = t
-
-    return out
+sys.path.append(os.path.join(os.path.dirname(current_dir), "eval", "eval_utils"))
+from eval.eval_utils.dataset_3dpw import ThreedpwSmplFullSeqDataset
 
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--result_path",
+        "--data_path",
         type=str,
-        default="",
-        help="Root directory of input results"
+        default="/home/data/hmq/datasets/hmr/3DPW",
     )
-    parser.add_argument(
-        "--result_path_flip",
-        type=str,
-        default="",
-        help="Root directory of input results"
-    )
-    parser.add_argument(
-        "--save_path",
-        type=str,
-        default="",
-        help="Root directory to save outputs"
-    )
-    parser.add_argument(
-        "--body_model_path",
-        type=str,
-        default="",
-        help="Root directory of the mhr/smpl models"
-    )
-    parser.add_argument(
-        "--label_path",
-        type=str,
-        default="",
-        help="Root directory of the labels"
-    )
-
     args = parser.parse_args()
+    data_path = args.data_path
+    save_path = f"{data_path}/split-occlusion"
 
-    result_path = args.result_path
-    save_path = args.save_path
-    # os.makedirs(save_path, exist_ok=True)
+    # - split-occlusion
+    #   - imageFiles
+    #       - seq_name_0/1
+    #       - ...
+    #   - supportFiles
+    #       - seq_name_0/1
+    #       - ...
+    #   - metadata.json
 
     # init dataset and metric evaluator
-    dataset_3dpw = ThreedpwSmplFullSeqDataset(label_path=args.label_path)
-    metric_3dpw = MetricMocap(body_model_path=args.body_model_path)
+    dataset_3dpw = ThreedpwSmplFullSeqDataset(label_path=f"{data_path}/hmr4d_support")
 
-    # init smpl & mhr models for conversion
-    mhr_model = MHR.from_files(folder=Path(f"{args.body_model_path}/assets"), lod=1, device=torch.device("cuda"))
-
-    smpl_model = smplx.SMPLX(model_path=f"{args.body_model_path}/smplx", gender="neutral").cuda()
-    converter = Conversion(
-        mhr_model=mhr_model, smpl_model=smpl_model, method="pytorch"
-    )
-
-    # smpl_model = make_smplx("smpl", gender="male")
-    # converter = Conversion(
-    #     mhr_model=mhr_model, smpl_model=smpl_model.bm, method="pytorch"
-    # )
+    metadata = {}
 
     for i in tqdm(range(len(dataset_3dpw)), desc="Processing 3DPW"):
         meta_data = dataset_3dpw[i]
@@ -135,6 +48,19 @@ if __name__ == "__main__":
                 for kk, vv in v.items():
                     if isinstance(vv, torch.Tensor):
                         v[kk] = vv.cuda()
+
+        image_list = glob.glob(os.path.join(data_path, "imageFiles", seq_name, "*.jpg"))
+        image_list.sort()
+        
+        idx = torch.nonzero(~meta_data['mask'], as_tuple=True)[0]
+        image_list_false = [image_list[i] for i in idx.tolist()]
+
+        {
+            "idx_list": torch.nonzero(~meta_data['mask'], as_tuple=True)[0],
+            "smpl_params": {"betas": meta_data['smpl_params']['betas'][0]},
+            "cam_angvel": meta_data["cam_angvel"][torch.nonzero(~meta_data['mask'], as_tuple=True)[0]],
+            "K_fullimg": meta_data["K_fullimg"][torch.nonzero(~meta_data['mask'], as_tuple=True)[0]],
+        }
 
         # if 'downtown_cafe' not in seq_name or obj_id != '0':
         #     continue
@@ -410,112 +336,112 @@ if __name__ == "__main__":
         # smpl_params['body_pose'] = smooth_results['body_pose'].squeeze(0)
         # smpl_params['transl'] = smooth_results['transl'].squeeze(0)
 
-        # import math
+        import math
 
-        # # Inputs:
-        # # mask: (L,) bool
-        # # smpl_params['global_orient']: (L, 3)
-        # # smpl_params['body_pose']:     (L, 63)
-        # # smpl_params['transl']:        (L, 3)
-        # # axis_angle_to_rotation_matrix
-        # # smpl_to_smpl_decode_o6dp
+        # Inputs:
+        # mask: (L,) bool
+        # smpl_params['global_orient']: (L, 3)
+        # smpl_params['body_pose']:     (L, 63)
+        # smpl_params['transl']:        (L, 3)
+        # axis_angle_to_rotation_matrix
+        # smpl_to_smpl_decode_o6dp
 
-        # SOFT_THR = 10.0   # degrees
-        # HARD_THR = 20.0   # degrees
+        SOFT_THR = 10.0   # degrees
+        HARD_THR = 20.0   # degrees
 
-        # mask = meta_data["mask"].bool()
-        # L = mask.shape[0]
+        mask = meta_data["mask"].bool()
+        L = mask.shape[0]
 
-        # # work on detached copies
-        # go = smpl_params["global_orient"].detach().clone()
-        # bp = smpl_params["body_pose"].detach().clone()
-        # tr = smpl_params["transl"].detach().clone()
+        # work on detached copies
+        go = smpl_params["global_orient"].detach().clone()
+        bp = smpl_params["body_pose"].detach().clone()
+        tr = smpl_params["transl"].detach().clone()
 
-        # # --------------------------------------------------
-        # # 1) split into contiguous True segments
-        # # --------------------------------------------------
-        # segments = []
-        # start = None
-        # for i in range(L):
-        #     if mask[i] and start is None:
-        #         start = i
-        #     elif (not mask[i]) and start is not None:
-        #         segments.append((start, i - 1))
-        #         start = None
-        # if start is not None:
-        #     segments.append((start, L - 1))
+        # --------------------------------------------------
+        # 1) split into contiguous True segments
+        # --------------------------------------------------
+        segments = []
+        start = None
+        for i in range(L):
+            if mask[i] and start is None:
+                start = i
+            elif (not mask[i]) and start is not None:
+                segments.append((start, i - 1))
+                start = None
+        if start is not None:
+            segments.append((start, L - 1))
 
-        # # --------------------------------------------------
-        # # helper: per-frame root rotation change (degrees)
-        # # --------------------------------------------------
-        # def root_angle_deg(go_seg):
-        #     """
-        #     go_seg: (T, 3) axis-angle
-        #     return: (T-1,) degrees
-        #     """
-        #     R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
-        #     R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
-        #     trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
-        #     cos = (trace - 1.0) / 2.0
-        #     cos = torch.clamp(cos, -1.0, 1.0)
-        #     return torch.acos(cos) * (180.0 / math.pi)
+        # --------------------------------------------------
+        # helper: per-frame root rotation change (degrees)
+        # --------------------------------------------------
+        def root_angle_deg(go_seg):
+            """
+            go_seg: (T, 3) axis-angle
+            return: (T-1,) degrees
+            """
+            R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
+            R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
+            trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
+            cos = (trace - 1.0) / 2.0
+            cos = torch.clamp(cos, -1.0, 1.0)
+            return torch.acos(cos) * (180.0 / math.pi)
 
-        # # --------------------------------------------------
-        # # 2) detect spikes in each segment and copy previous
-        # # --------------------------------------------------
-        # with torch.no_grad():
-        #     for s, e in segments:
-        #         T = e - s + 1
-        #         if T < 3:
-        #             continue
+        # --------------------------------------------------
+        # 2) detect spikes in each segment and copy previous
+        # --------------------------------------------------
+        with torch.no_grad():
+            for s, e in segments:
+                T = e - s + 1
+                if T < 3:
+                    continue
 
-        #         ang = root_angle_deg(go[s:e+1])   # (T-1,)
+                ang = root_angle_deg(go[s:e+1])   # (T-1,)
 
-        #         for t in range(1, T - 1):
-        #             a_prev = ang[t - 1].item()
-        #             a_next = ang[t].item()
+                for t in range(1, T - 1):
+                    a_prev = ang[t - 1].item()
+                    a_next = ang[t].item()
 
-        #             # spike pattern: one large jump, neighbor small
-        #             if (a_prev > HARD_THR and a_next < SOFT_THR) or \
-        #             (a_next > HARD_THR and a_prev < SOFT_THR):
+                    # spike pattern: one large jump, neighbor small
+                    if (a_prev > HARD_THR and a_next < SOFT_THR) or \
+                    (a_next > HARD_THR and a_prev < SOFT_THR):
 
-        #                 abs_t = s + t
-        #                 go[abs_t] = go[abs_t - 1]
-        #                 bp[abs_t] = bp[abs_t - 1]
-        #                 tr[abs_t] = tr[abs_t - 1]
+                        abs_t = s + t
+                        go[abs_t] = go[abs_t - 1]
+                        bp[abs_t] = bp[abs_t - 1]
+                        tr[abs_t] = tr[abs_t - 1]
 
-        # # write back de-spiked sequence
-        # smpl_params["global_orient"] = go
-        # smpl_params["body_pose"] = bp
-        # smpl_params["transl"] = tr
+        # write back de-spiked sequence
+        smpl_params["global_orient"] = go
+        smpl_params["body_pose"] = bp
+        smpl_params["transl"] = tr
 
-        # # --------------------------------------------------
-        # # 3) final smoothing (your original 4 lines)
-        # # --------------------------------------------------
-        # with torch.no_grad():
-        #     for s, e in segments:
-        #         T = e - s + 1
-        #         if T < 2:
-        #             continue
+        # --------------------------------------------------
+        # 3) final smoothing (your original 4 lines)
+        # --------------------------------------------------
+        with torch.no_grad():
+            for s, e in segments:
+                T = e - s + 1
+                if T < 2:
+                    continue
 
-        #         # smpl_to_smpl_decode_o6dp internally uses savgol(window_length=11),
-        #         # so only enable smoothing when the segment is long enough.
-        #         use_smooth = (T >= 11)
-        #         if not use_smooth:
-        #             continue
+                # smpl_to_smpl_decode_o6dp internally uses savgol(window_length=11),
+                # so only enable smoothing when the segment is long enough.
+                use_smooth = (T >= 11)
+                if not use_smooth:
+                    continue
 
-        #         smooth_results = smpl_to_smpl_decode_o6dp(
-        #             smpl_params["global_orient"][s:e+1].unsqueeze(0),
-        #             smpl_params["body_pose"][s:e+1].unsqueeze(0),
-        #             smpl_params["transl"][s:e+1].unsqueeze(0),
-        #             should_apply_smooothing=use_smooth,
-        #         )
+                smooth_results = smpl_to_smpl_decode_o6dp(
+                    smpl_params["global_orient"][s:e+1].unsqueeze(0),
+                    smpl_params["body_pose"][s:e+1].unsqueeze(0),
+                    smpl_params["transl"][s:e+1].unsqueeze(0),
+                    should_apply_smooothing=use_smooth,
+                )
 
-        #         smpl_params["global_orient"][s:e+1] = smooth_results["global_orient"].squeeze(0)
-        #         smpl_params["body_pose"][s:e+1] = smooth_results["body_pose"].squeeze(0)
-        #         smpl_params["transl"][s:e+1] = smooth_results["transl"].squeeze(0)
+                smpl_params["global_orient"][s:e+1] = smooth_results["global_orient"].squeeze(0)
+                smpl_params["body_pose"][s:e+1] = smooth_results["body_pose"].squeeze(0)
+                smpl_params["transl"][s:e+1] = smooth_results["transl"].squeeze(0)
 
         # torch.save(smpl_params, f'{save_path}/{seq_name}_{obj_id}_tensor_dict.pth')
-        metric_3dpw.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)
+        metric_3dpw.evaluate(smpl_params, meta_data, None, None, save_path)
         # metric_3dpw.evaluate(smpl_params, meta_data, mhr_height, data_filled)
         # smpl2obj(smpl_model, smpl_params['body_pose'], 'mhr2smpl1.obj'), verify the conversion

@@ -49,3 +49,5 @@ def jpg_folder_to_mp4(folder: str, output_filename: str, fps: int = 25):
 
     writer.release()
     print(f"Saved video to: {output_filename}")
+
+jpg_folder_to_mp4("/home/data/hmq/datasets/svos/DAVIS/2017/trainval/JPEGImages/480p/breakdance", "example3.mp4")

@@ -24,6 +24,9 @@ def inference(args):
     # inference
     for seq in tqdm(test_seq_name_list):
 
+        # if 'car' not in seq:
+        #     continue
+
         # 0. init outputs
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir
@@ -41,6 +44,9 @@ def inference(args):
             except:
                 break
             # predictor.RUNTIME['bboxes'] = bboxes[seq_name_with_id]['bbx_xyxy']
+        
+        # from eval.legency.vis_kps import draw_points_with_indices
+
         predictor.RUNTIME['bboxes'] = box_list
         predictor.RUNTIME['kps'] = kp_list
         with torch.autocast("cuda", enabled=False):
