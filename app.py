@@ -23,6 +23,8 @@ import gradio as gr
 import numpy as np
 import torch.nn.functional as F
 
+from kp_utils import draw, draw_s, build_body_keypoint_dict, find_topk_similar_points_on_a, visualize_topk_points_on_image, visualize_closest_top1_per_keypoint
+
 from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
@@ -245,6 +247,20 @@ def prepare_video(path: str):
     RUNTIME['masks'] = {}   # masks
     RUNTIME['out_obj_ids'] = []
 
+    # debugging
+
+    inference_state = predictor.init_state(video_path="/root/projects/sam-body4d/mem")
+    predictor.clear_all_points_in_video(inference_state)
+    with torch.no_grad():
+        a = predictor._get_image_feature(inference_state, 0, 1)
+        b = predictor._get_image_feature(inference_state, 1, 1)
+
+    kps = np.load('63.npy')
+    kps_dict = build_body_keypoint_dict(kps)
+    top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict)
+    visualize_topk_points_on_image("/root/projects/sam-body4d/mem/00000015.jpg", top3)
+    visualize_closest_top1_per_keypoint("/root/projects/sam-body4d/mem/00000015.jpg", kps_dict, top3)
+
     return path, fps, first_frame, slider_cfg, time_text
 
 
@@ -257,7 +273,6 @@ def on_upload(file_obj):
     if file_obj is None:
         return prepare_video(None)
     return prepare_video(file_obj.name)
-
 
 def on_example_select(evt: gr.SelectData):
     """
@@ -279,7 +294,6 @@ def on_example_select(evt: gr.SelectData):
 
     return prepare_video(path)
 
-
 def update_frame(idx, path, fps):
     """Update current frame + time text when slider moves."""
     if path is None:
@@ -300,7 +314,6 @@ def update_frame(idx, path, fps):
     end_text = f"{int(dur // 60):02d}:{int(dur % 60):02d}"
 
     return frame, f"{cur_text} / {end_text}"
-
 
 def on_click(evt: gr.SelectData, point_type: str, video_path: str, frame_idx: int):
     """
@@ -385,7 +398,6 @@ def on_click(evt: gr.SelectData, point_type: str, video_path: str, frame_idx: in
     updated = draw_point_marker(frame, x, y, point_type_norm)
     return updated
 
-
 def add_target(targets, selected):
     """Add new target and select it by default."""
     name = f"Target {len(targets) + 1}"
@@ -402,7 +414,6 @@ def add_target(targets, selected):
 
     return targets, selected, gr.update(choices=targets, value=selected)
 
-
 def toggle_upload(open_state: bool):
     """Toggle upload panel visibility and button label."""
     new_state = not open_state
@@ -412,7 +423,6 @@ def toggle_upload(open_state: bool):
         else "Upload Video (click to open)"
     )
     return new_state, gr.update(visible=new_state), gr.update(value=label)
-
 
 def on_mask_generation(video_path: str):
     """
@@ -445,8 +455,10 @@ def on_mask_generation(video_path: str):
 
     IMAGE_PATH = os.path.join(OUTPUT_DIR, 'images') # for sam3-3d-body
     MASKS_PATH = os.path.join(OUTPUT_DIR, 'masks')  # for sam3-3d-body
+    MASKS_PATH_VIS = os.path.join(OUTPUT_DIR, 'masks_vis')  # for sam3-3d-body
     os.makedirs(IMAGE_PATH, exist_ok=True)
     os.makedirs(MASKS_PATH, exist_ok=True)
+    os.makedirs(MASKS_PATH_VIS, exist_ok=True)
 
     for out_frame_idx in range(0, len(video_segments), vis_frame_stride):
         img = RUNTIME['inference_state']['images'][out_frame_idx].detach().float().cpu()
@@ -472,6 +484,10 @@ def on_mask_generation(video_path: str):
         msk_pil.putpalette(DAVIS_PALETTE)
         img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx:08d}.jpg"))
         msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx:08d}.png"))
+        mask = (out_mask[0] == 0).astype(np.uint8) * 255
+        img = mask_painter(img, mask, mask_color=1, mask_alpha=0.5)
+        img_vis = Image.fromarray(img).convert('P')
+        img_vis.save(os.path.join(MASKS_PATH_VIS, f"{out_frame_idx:08d}.png"))
 
     out_video_path = os.path.join(OUTPUT_DIR, f"video_mask_{time.time():.0f}.mp4")
     images_to_mp4(img_to_video, out_video_path, fps=RUNTIME['video_fps'])
@@ -750,14 +766,17 @@ def on_4d_generation(video_path: str):
         # Process with external mask
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
         
-        # for completed frames (33)
-        if len(batch_images) < 64:
-            batch_kps = [torch.from_numpy(np.load("1.npy")).unsqueeze(0)]
-            bbox = mask_png_to_bbox_xyxy("/root/projects/sam-body4d/outputs/20260118_195759_383_cb108cb4/completion/TA42/masks/00000000.png", obj_id = 1)
-            # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]})
-            # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps)
-            mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[0]], [batch_masks[0]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [0])
-            mask_outputs[0] = mask_outputs_[0]
+        # # for completed frames (33)
+        # if len(batch_images) == 64:
+        #     batch_kps = [torch.from_numpy(np.load("1.npy")).unsqueeze(0)]
+        #     # bbox = mask_png_to_bbox_xyxy("/root/projects/sam-body4d/outputs/20260118_195759_383_cb108cb4/completion/TA42/masks/00000000.png", obj_id = 1)
+        #     # # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]})
+        #     # # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps)
+        #     mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[0]], [batch_masks[0]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [0])
+        #     mask_outputs[0] = mask_outputs_[0]
+        #     # a = 1
+
+
 
         num_empth_ids = 0
         for frame_id in range(len(batch_images)):

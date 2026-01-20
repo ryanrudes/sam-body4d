@@ -206,11 +206,11 @@ class SAM3DBodyEstimator:
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com
 
-            batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict, kps=kps_batch[i])
-            try:
+            if kps_batch is not None:
+                batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict, kps=kps_batch[i])
                 kps_list.append(batch['keypoints_2d'].numpy())
-            except:
-                pass
+            else:
+                batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict)
 
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
