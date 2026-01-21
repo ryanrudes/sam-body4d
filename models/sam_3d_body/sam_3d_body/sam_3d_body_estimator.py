@@ -19,6 +19,7 @@ from sam_3d_body.data.utils.prepare_batch import prepare_batch
 from sam_3d_body.utils import recursive_to
 from torchvision.transforms import ToTensor
 # from vis_kps import draw_points_with_indices
+from PIL import Image
 
 
 class SAM3DBodyEstimator:
@@ -82,6 +83,7 @@ class SAM3DBodyEstimator:
         kps_batch=None, 
         flip=False,
         kps_id=None,
+        _occ_image_batch_ori=None,
     ):
         """
         Perform model prediction in top-down format: assuming input is a full image.
@@ -159,6 +161,7 @@ class SAM3DBodyEstimator:
 
             # Handle masks - either provided externally or generated via SAM2
             masks_score = None
+
             if use_mask and masks[i] is not None:
                 # Use provided masks - ensure they match the number of detected boxes
                 # print(f"Using provided masks: {masks[i].shape}")
@@ -206,11 +209,20 @@ class SAM3DBodyEstimator:
                     img_com = cv2.cvtColor(img_com, cv2.COLOR_BGR2RGB)
                     img_com_dict[idx_k-1] = img_com
 
+            if not use_mask:
+                masks_binary = None
+                masks_score = None
+
             if kps_batch is not None:
-                batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict, kps=kps_batch[i])
-                kps_list.append(batch['keypoints_2d'].numpy())
+                if len(kps_batch[i].shape) == 2:
+                    batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict, kps=np.expand_dims(kps_batch[i], axis=0))
+                    kp3 = np.expand_dims(kps_batch[i], axis=0)[:, :, 2:3]
+                else:
+                    batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict, kps=kps_batch[i])
+                # kps_list.append(batch['keypoints_2d'].numpy())
+                kps_list.append(np.concatenate([batch['keypoints_2d'].numpy(), kp3], axis=-1))
             else:
-                batch = prepare_batch(img, self.transform, boxes, None, None, img_com_dict=img_com_dict)
+                batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict)
 
         # Handle camera intrinsics
         # - either provided externally or generated via default FOV estimator
@@ -228,11 +240,23 @@ class SAM3DBodyEstimator:
             # else:
             #     cam_int = batch["cam_int"].clone()
 
-            input_image = batch["img_ori"][0].data
-            cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
-                batch["img"]
-            )
-            batch["cam_int"] = cam_int.clone()
+            if cam_int is not None:
+                # print("Using provided camera intrinsics...")
+                cam_int = cam_int.to(batch["img"])
+                batch["cam_int"] = cam_int.clone()
+            elif self.fov_estimator is not None:
+                print("Running FOV estimator ...")
+                # input_image = batch["img_ori"][0].data
+                if _occ_image_batch_ori is not None:
+                    input_image = np.array(Image.open(_occ_image_batch_ori[i])).astype('uint8')
+                else:
+                    input_image = batch["img_ori"][0].data
+                cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
+                    batch["img"]
+                )
+                batch["cam_int"] = cam_int.clone()
+            else:
+                cam_int = batch["cam_int"].clone()
 
             batch_list.append(batch)
 
@@ -297,6 +321,10 @@ class SAM3DBodyEstimator:
         for b_idx in range(batch_dict["img"].shape[0]):    # batch 
             all_out = []
             for idx in range(batch_dict["img"].shape[1]):    # person
+                try:
+                    xx = (idx+1) not in id_batch[b_idx]
+                except:
+                    a = 1
                 if (idx+1) not in id_batch[b_idx]:
                     continue
                 all_out.append(

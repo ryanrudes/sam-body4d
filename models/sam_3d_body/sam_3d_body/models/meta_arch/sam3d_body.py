@@ -1157,7 +1157,11 @@ class SAM3DBody(BaseModel):
 					# torch.arange(70, device=keypoints_prompt.device)[None, :, None].expand(keypoints_prompt.shape[0], -1, 1)],
 					dim=2
 				)
-			else:   # evaluation mode (points from benchmarks)
+			elif keypoints_prompt.shape[-1] == 3:
+				keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])
+				NN = keypoints_prompt.shape[-2]
+				keypoints_prompt = keypoints_prompt.reshape(-1, NN, 3)
+			elif keypoints_prompt.shape[-2] == 17:   # evaluation mode (points from benchmarks)
 				keypoints_prompt = torch.from_numpy(keypoints_prompt).to(batch["img"])  # torch.Size([N, M, 17, 2])
 				keypoints_prompt = keypoints_prompt.reshape(-1, 17, 2)
 				# keypoints_prompt[:, :, 2] = coco17_to_mhr70.unsqueeze(0).expand(keypoints_prompt.size(0), -1)
@@ -1167,6 +1171,7 @@ class SAM3DBody(BaseModel):
 					coco17_to_mhr70.unsqueeze(0).expand(keypoints_prompt.size(0), -1).unsqueeze(-1).cuda()],
 					dim=2
 				)
+			
 			
 			keypoints_prompt = keypoints_prompt / torch.tensor([512, 512, 1.0], device=keypoints_prompt.device, dtype=keypoints_prompt.dtype)  # x/width, y/height
 
@@ -1768,7 +1773,7 @@ class SAM3DBody(BaseModel):
 					img_com_dict[idx_k-1] = img_com[:, ::-1]
 
 			batch_lhand = prepare_batch(
-				flipped_img, transform_hand, left_xyxy[idx_img*num_objects:(idx_img+1)*num_objects], cam_int=cam_int.clone()[idx_img:idx_img+1], img_com_dict=img_com_dict, kps=None,
+				flipped_img, transform_hand, left_xyxy[idx_img*num_objects:(idx_img+1)*num_objects], cam_int=cam_int.clone()[idx_img:idx_img+1], img_com_dict=img_com_dict,
 			)
 			batch_lhand_list.append(batch_lhand)
 		

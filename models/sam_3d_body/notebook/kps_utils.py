@@ -1,6 +1,69 @@
+from typing import List, Dict
+
+def pick_best_from_run(iou_list: List[float], l: int, r: int) -> int:
+    """在闭区间 [l, r] 的 1-run 内，返回 iou 最大的下标；并列取更靠近 0 的（可改）"""
+    best_i = l
+    best_v = iou_list[l]
+    for i in range(l + 1, r + 1):
+        v = iou_list[i]
+        if v > best_v:
+            best_v = v
+            best_i = i
+    return best_i
+
+def build_zero_neighbor_dict(bin_list: List[int], iou_list: List[float]) -> Dict[int, List[int]]:
+    """
+    对每个 0 的位置 idx：
+      - 找左侧最近的连续 1 段（run），在该段内选 iou 最大的 1 的下标
+      - 找右侧最近的连续 1 段（run），同理
+    返回：{zero_idx: [left_best?, right_best?]}
+    """
+    n = len(bin_list)
+    assert n == len(iou_list), "bin_list 和 iou_list 长度必须相同"
+    for v in bin_list:
+        if v not in (0, 1):
+            raise ValueError("bin_list 只能包含 0/1")
+
+    out: Dict[int, List[int]] = {}
+
+    for idx, v in enumerate(bin_list):
+        if v != 0:
+            continue
+
+        picked = []
+
+        # -------- left side: find nearest 1-run ending at idx-1 or earlier --------
+        j = idx - 1
+        while j >= 0 and bin_list[j] == 0:
+            j -= 1
+        if j >= 0 and bin_list[j] == 1:
+            r = j
+            l = j
+            while l - 1 >= 0 and bin_list[l - 1] == 1:
+                l -= 1
+            left_best = pick_best_from_run(iou_list, l, r)
+            picked.append(left_best)
+
+        # -------- right side: find nearest 1-run starting at idx+1 or later --------
+        j = idx + 1
+        while j < n and bin_list[j] == 0:
+            j += 1
+        if j < n and bin_list[j] == 1:
+            l = j
+            r = j
+            while r + 1 < n and bin_list[r + 1] == 1:
+                r += 1
+            right_best = pick_best_from_run(iou_list, l, r)
+            picked.append(right_best)
+
+        out[idx] = picked
+
+    return out
 
 
-KEY_BODY = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 41, 62]  # key body joints for prompting
+
+
+KEY_BODY = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 41, 62]  # key body joints for prompting
 
 KEY_POINT_NAME = { 0: "nose", 1: "left_eye", 2: "right_eye", 3: "left_ear", 4: "right_ear", 5: "left_shoulder", 6: "right_shoulder", 7: "left_elbow", 8: "right_elbow", 9: "left_hip", 10: "right_hip", 11: "left_knee", 12: "right_knee", 13: "left_ankle", 14: "right_ankle", 15: "left_big_toe_tip", 16: "left_small_toe_tip", 17: "left_heel", 18: "right_big_toe_tip", 19: "right_small_toe_tip", 20: "right_heel", 21: "right_thumb_tip", 22: "right_thumb_first_joint", 23: "right_thumb_second_joint", 24: "right_thumb_third_joint", 25: "right_index_tip", 26: "right_index_first_joint", 27: "right_index_second_joint", 28: "right_index_third_joint", 29: "right_middle_tip", 30: "right_middle_first_joint", 31: "right_middle_second_joint", 32: "right_middle_third_joint", 33: "right_ring_tip", 34: "right_ring_first_joint", 35: "right_ring_second_joint", 36: "right_ring_third_joint", 37: "right_pinky_tip", 38: "right_pinky_first_joint", 39: "right_pinky_second_joint", 40: "right_pinky_third_joint", 41: "right_wrist", 42: "left_thumb_tip", 43: "left_thumb_first_joint", 44: "left_thumb_second_joint", 45: "left_thumb_third_joint", 46: "left_index_tip", 47: "left_index_first_joint", 48: "left_index_second_joint", 49: "left_index_third_joint", 50: "left_middle_tip", 51: "left_middle_first_joint", 52: "left_middle_second_joint", 53: "left_middle_third_joint", 54: "left_ring_tip", 55: "left_ring_first_joint", 56: "left_ring_second_joint", 57: "left_ring_third_joint", 58: "left_pinky_tip", 59: "left_pinky_first_joint", 60: "left_pinky_second_joint", 61: "left_pinky_third_joint", 62: "left_wrist", 63: "left_olecranon", 64: "right_olecranon", 65: "left_cubital_fossa", 66: "right_cubital_fossa", 67: "left_acromion", 68: "right_acromion", 69: "neck", }
 
@@ -313,12 +376,18 @@ def draw_skeleton_on_white_bg(
         raise RuntimeError(f"Failed to write image: {save_path}")
     return save_path
 
+
+import math
 import torch
 import torch.nn.functional as F
+from PIL import Image
+
 def find_topk_similar_points_on_a(
-    a: torch.Tensor,                 # (1, 256, 72, 72)
-    b: torch.Tensor,                 # (1, 256, 72, 72)
-    point_dict: dict,                # {idx: {"xy":[x,y], ...}, ...} 这些点在 b 的 480x854 坐标系里
+    a: torch.Tensor,
+    b: torch.Tensor,
+    point_dict: dict,
+    mask_path: str = None,
+    obj_id: int = None,
     H: int = 480,
     W: int = 854,
     feat_h: int = 72,
@@ -326,21 +395,6 @@ def find_topk_similar_points_on_a(
     topk: int = 3,
     eps: float = 1e-8,
 ):
-    """
-    对 b 的每个关键点：
-      1) 用 (H,W) 把 (x,y) 映射到 (feat_h, feat_w) 特征图上取出 b 的 256D 特征向量
-      2) 在 a 的所有 (feat_h*feat_w) 位置上做 cosine 相似度
-      3) 取 topk 最相近位置，映射回 (H,W) 坐标输出
-
-    Returns:
-        out: dict
-            {
-              idx: {
-                "b_xy": [x, y],                         # 原始 b 上关键点（480x854）
-                "a_topk_xy": [[x1,y1],[x2,y2],[x3,y3]]  # a 上 topk 点（480x854）
-              }, ...
-            }
-    """
     assert a.ndim == 4 and b.ndim == 4 and a.shape == b.shape, "a and b must have same shape (1,C,Hf,Wf)"
     assert a.shape[0] == 1, "batch must be 1"
     C = a.shape[1]
@@ -350,6 +404,35 @@ def find_topk_similar_points_on_a(
 
     device = a.device
     dtype = a.dtype
+
+    # --- load mask (optional) ---
+    mask_img = None
+    obj_id_int = None
+    if mask_path is not None and obj_id is not None:
+        m = Image.open(mask_path)
+        if m.mode != "P":
+            m = m.convert("P")
+        if m.size != (W, H):
+            m = m.resize((W, H), resample=Image.NEAREST)
+        mask_img = m
+        obj_id_int = int(obj_id)
+
+    def is_finite_xy(x: float, y: float) -> bool:
+        # python float / numpy float / torch scalar float 都能 cover
+        return (x is not None and y is not None and
+                math.isfinite(float(x)) and math.isfinite(float(y)))
+
+    def is_foreground(x_img: float, y_img: float) -> bool:
+        # NEW: NaN/Inf 直接判 False（跳过）
+        if not is_finite_xy(x_img, y_img):
+            return False
+        if mask_img is None:
+            return True
+        xi = int(round(float(x_img)))
+        yi = int(round(float(y_img)))
+        if xi < 0 or xi >= W or yi < 0 or yi >= H:
+            return False
+        return int(mask_img.getpixel((xi, yi))) == obj_id_int
 
     # normalize a for cosine similarity
     a_norm = a / (a.norm(dim=1, keepdim=True) + eps)          # (1,256,72,72)
@@ -384,6 +467,15 @@ def find_topk_similar_points_on_a(
                 continue
 
             x_img, y_img = float(xy[0]), float(xy[1])
+
+            # NEW: 先过滤 NaN/Inf（避免后面任何地方炸）
+            if not is_finite_xy(x_img, y_img):
+                continue
+
+            # NEW: mask 前景过滤
+            if not is_foreground(x_img, y_img):
+                continue
+
             x_feat, y_feat = imgxy_to_featxy(x_img, y_img)
 
             q = sample_b_feature(x_feat, y_feat)              # (256,)
@@ -403,6 +495,137 @@ def find_topk_similar_points_on_a(
             }
 
     return out
+
+
+
+# import torch
+# import torch.nn.functional as F
+# from PIL import Image
+
+# def find_topk_similar_points_on_a(
+#     a: torch.Tensor,                 # (1, 256, 72, 72)
+#     b: torch.Tensor,                 # (1, 256, 72, 72)
+#     point_dict: dict,                # {idx: {"xy":[x,y], ...}, ...} 这些点在 b 的 (H,W) 坐标系里
+#     mask_path: str = None,           # 新增：mask 路径（P 模式 / 或可转为 P/L）
+#     obj_id: int = None,              # 新增：前景 ID（mask == obj_id 为前景）
+#     H: int = 480,
+#     W: int = 854,
+#     feat_h: int = 72,
+#     feat_w: int = 72,
+#     topk: int = 3,
+#     eps: float = 1e-8,
+# ):
+#     """
+#     对 b 的每个关键点（仅当落在 mask 前景区域内）：
+#       1) 用 (H,W) 把 (x,y) 映射到 (feat_h, feat_w) 特征图上取出 b 的 256D 特征向量
+#       2) 在 a 的所有 (feat_h*feat_w) 位置上做 cosine 相似度
+#       3) 取 topk 最相近位置，映射回 (H,W) 坐标输出
+
+#     注意：
+#       - 如果提供了 mask_path + obj_id，则只有 mask(x,y) == obj_id 的 keypoint 才会参与匹配；
+#         其他点会被跳过（不出现在输出 out 里）。
+
+#     Returns:
+#         out: dict
+#             {
+#               idx: {
+#                 "b_xy": [x, y],                         # 原始 b 上关键点（H,W）
+#                 "a_topk_xy": [[x1,y1],[x2,y2],[x3,y3]]  # a 上 topk 点（H,W）
+#               }, ...
+#             }
+#     """
+#     assert a.ndim == 4 and b.ndim == 4 and a.shape == b.shape, "a and b must have same shape (1,C,Hf,Wf)"
+#     assert a.shape[0] == 1, "batch must be 1"
+#     C = a.shape[1]
+#     assert C == 256, f"expected C=256, got {C}"
+#     assert a.shape[2] == feat_h and a.shape[3] == feat_w, f"expected (feat_h,feat_w)=({feat_h},{feat_w})"
+#     assert topk >= 1
+
+#     device = a.device
+#     dtype = a.dtype
+
+#     # --- load mask (optional) ---
+#     mask_img = None
+#     if mask_path is not None and obj_id is not None:
+#         m = Image.open(mask_path)
+#         # 你希望用 P 模式；如果不是 P，也尽量转成 P/L 后再取像素值
+#         if m.mode != "P":
+#             # 若原本就是单通道/灰度，L 更直观；但你说 P 模式，这里保持转为 P
+#             m = m.convert("P")
+#         # 确保 mask 与 (W,H) 对齐（b 的坐标系）
+#         if m.size != (W, H):
+#             m = m.resize((W, H), resample=Image.NEAREST)
+#         mask_img = m
+#         obj_id_int = int(obj_id)
+
+#     def is_foreground(x_img: float, y_img: float) -> bool:
+#         if mask_img is None:
+#             return True
+#         xi = int(round(x_img))
+#         yi = int(round(y_img))
+#         if xi < 0 or xi >= W or yi < 0 or yi >= H:
+#             return False
+#         # P 模式下 getpixel 返回 palette index（就是我们要的 obj_id）
+#         return int(mask_img.getpixel((xi, yi))) == obj_id_int
+
+#     # normalize a for cosine similarity
+#     a_norm = a / (a.norm(dim=1, keepdim=True) + eps)          # (1,256,72,72)
+#     a_flat = a_norm[0].reshape(C, feat_h * feat_w)            # (256, N)
+
+#     out = {}
+
+#     def imgxy_to_featxy(x_img: float, y_img: float):
+#         x_img = max(0.0, min(float(W - 1), float(x_img)))
+#         y_img = max(0.0, min(float(H - 1), float(y_img)))
+#         x_feat = x_img / (W - 1) * (feat_w - 1)
+#         y_feat = y_img / (H - 1) * (feat_h - 1)
+#         return x_feat, y_feat
+
+#     def featxy_to_imgxy(x_feat: int, y_feat: int):
+#         x_img = x_feat / (feat_w - 1) * (W - 1)
+#         y_img = y_feat / (feat_h - 1) * (H - 1)
+#         return float(x_img), float(y_img)
+
+#     def sample_b_feature(x_feat: float, y_feat: float):
+#         gx = x_feat / (feat_w - 1) * 2.0 - 1.0
+#         gy = y_feat / (feat_h - 1) * 2.0 - 1.0
+#         grid = torch.tensor([[[[gx, gy]]]], device=device, dtype=dtype)  # (1,1,1,2)
+#         v = F.grid_sample(b, grid, mode="bilinear", align_corners=True)[0, :, 0, 0]  # (256,)
+#         v = v / (v.norm() + eps)
+#         return v
+
+#     with torch.no_grad():
+#         for idx, vv in point_dict.items():
+#             xy = vv.get("xy", None)
+#             if xy is None or len(xy) < 2:
+#                 continue
+
+#             x_img, y_img = float(xy[0]), float(xy[1])
+
+#             # --- NEW: only match keypoints inside foreground on mask (b coords) ---
+#             if not is_foreground(x_img, y_img):
+#                 continue
+
+#             x_feat, y_feat = imgxy_to_featxy(x_img, y_img)
+
+#             q = sample_b_feature(x_feat, y_feat)              # (256,)
+#             sims = torch.matmul(a_flat.t(), q)                # (N,)
+#             _, top_idx = torch.topk(sims, k=min(topk, sims.numel()), largest=True)
+
+#             a_topk_xy = []
+#             for flat_i in top_idx.tolist():
+#                 yy = flat_i // feat_w
+#                 xx = flat_i % feat_w
+#                 ax, ay = featxy_to_imgxy(xx, yy)
+#                 a_topk_xy.append([ax, ay])
+
+#             out[int(idx)] = {
+#                 "b_xy": [x_img, y_img],
+#                 "a_topk_xy": a_topk_xy,
+#             }
+
+#     return out
+
 
 
 
