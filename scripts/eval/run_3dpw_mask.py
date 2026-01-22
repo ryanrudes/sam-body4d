@@ -65,7 +65,7 @@ def inference(args):
         # 4. hmr upon masks
 
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list)
+            predictor.on_4d_generation(frame_list, cam_int)
 
 
 if __name__ == "__main__":

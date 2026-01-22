@@ -164,6 +164,10 @@ class offline_app:
         mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
         obj_ratio_dict = {}         # avoid fake completion by obj ratio on the first frame
 
+        # same cam_int across ALL frames
+        input_image = np.array(Image.open(images_list[0])).astype('uint8')
+        cam_int = self.sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
+
         for i in tqdm(range(0, n, batch_size)):
             batch_images = images_list[i:i + batch_size]
 
@@ -335,7 +339,7 @@ class offline_app:
             batch_kps = None if kps_list is None else [kps[i:i + batch_size] for kps in kps_list]
 
             # Process with external mask
-            mask_outputs, id_batch, empty_frame_list = process_image_with_bbox(self.sam3_3d_body_model, batch_images, batch_boxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps, flip=flip)
+            mask_outputs, id_batch, empty_frame_list = process_image_with_bbox(self.sam3_3d_body_model, batch_images, batch_boxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps, flip=flip, cam_int=cam_int)
             
             num_empth_ids = 0
             for frame_id in range(len(batch_images)):

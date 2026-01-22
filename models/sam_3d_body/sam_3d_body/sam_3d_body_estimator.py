@@ -18,7 +18,7 @@ from sam_3d_body.data.utils.io import load_image
 from sam_3d_body.data.utils.prepare_batch import prepare_batch
 from sam_3d_body.utils import recursive_to
 from torchvision.transforms import ToTensor
-# from vis_kps import draw_points_with_indices
+from scripts.eval.legency.vis_kps import draw_points_with_indices
 from PIL import Image
 
 
@@ -217,10 +217,13 @@ class SAM3DBodyEstimator:
                 if len(kps_batch[i].shape) == 2:
                     batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict, kps=np.expand_dims(kps_batch[i], axis=0))
                     kp3 = np.expand_dims(kps_batch[i], axis=0)[:, :, 2:3]
+                    kps_list.append(np.concatenate([batch['keypoints_2d'].numpy(), kp3], axis=-1))
                 else:
                     batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict, kps=kps_batch[i])
-                # kps_list.append(batch['keypoints_2d'].numpy())
-                kps_list.append(np.concatenate([batch['keypoints_2d'].numpy(), kp3], axis=-1))
+                    kps_list.append(batch['keypoints_2d'].numpy())
+                    # save for debuging :D
+                    # draw_points_with_indices(batch['img'][0][0], batch['keypoints_2d'].numpy()[0], "kp-0.jpg")
+                    # draw_points_with_indices(batch['img'][0][1], batch['keypoints_2d'].numpy()[1], "kp-1.jpg")
             else:
                 batch = prepare_batch(img, self.transform, boxes, masks_binary, masks_score, img_com_dict=img_com_dict)
 
@@ -321,10 +324,6 @@ class SAM3DBodyEstimator:
         for b_idx in range(batch_dict["img"].shape[0]):    # batch 
             all_out = []
             for idx in range(batch_dict["img"].shape[1]):    # person
-                try:
-                    xx = (idx+1) not in id_batch[b_idx]
-                except:
-                    a = 1
                 if (idx+1) not in id_batch[b_idx]:
                     continue
                 all_out.append(

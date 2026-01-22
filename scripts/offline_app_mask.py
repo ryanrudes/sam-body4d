@@ -202,7 +202,7 @@ class OfflineApp:
             # img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
             msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
 
-    def on_4d_generation(self, images_list: str=None):
+    def on_4d_generation(self, images_list: str=None, kps_list=None, box_list=None):
         """
         Placeholder for 4D generation.
         Later:
@@ -252,6 +252,10 @@ class OfflineApp:
 
         mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
         obj_ratio_dict = {}         # avoid fake completion by obj ratio on the first frame
+
+        # same cam_int across ALL frames
+        input_image = np.array(Image.open(images_list[0])).astype('uint8')
+        cam_int = self.sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
 
         for i in tqdm(range(0, n, batch_size)):
             batch_images = images_list[i:i + batch_size]
@@ -423,8 +427,11 @@ class OfflineApp:
                 for obj_id in self.RUNTIME['out_obj_ids']:
                     occ_dict[obj_id] = [1] * len(batch_masks)
 
+            batch_boxes = [bboxes[i:i + batch_size] for bboxes in box_list]
+            batch_kps = None if kps_list is None else [kps[i:i + batch_size] for kps in kps_list]
+
             # Process with external mask
-            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, batch_kps=batch_kps)
             
             num_empth_ids = 0
             for frame_id in range(len(batch_images)):

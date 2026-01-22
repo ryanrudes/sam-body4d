@@ -23,8 +23,6 @@ import gradio as gr
 import numpy as np
 import torch.nn.functional as F
 
-from kp_utils import draw, draw_s, build_body_keypoint_dict, find_topk_similar_points_on_a, visualize_topk_points_on_image, visualize_closest_top1_per_keypoint
-
 from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
@@ -246,20 +244,6 @@ def prepare_video(path: str):
     RUNTIME['objects'] = {} # points
     RUNTIME['masks'] = {}   # masks
     RUNTIME['out_obj_ids'] = []
-
-    # # debugging
-
-    # inference_state = predictor.init_state(video_path="/root/projects/sam-body4d/mem")
-    # predictor.clear_all_points_in_video(inference_state)
-    # with torch.no_grad():
-    #     a = predictor._get_image_feature(inference_state, 0, 1)
-    #     b = predictor._get_image_feature(inference_state, 1, 1)
-
-    # kps = np.load('63.npy')
-    # kps_dict = build_body_keypoint_dict(kps)
-    # top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict)
-    # visualize_topk_points_on_image("/root/projects/sam-body4d/mem/00000015.jpg", top3)
-    # visualize_closest_top1_per_keypoint("/root/projects/sam-body4d/mem/00000015.jpg", kps_dict, top3)
 
     return path, fps, first_frame, slider_cfg, time_text
 
@@ -522,7 +506,7 @@ def on_mask_generation(video_path: str):
         msk = np.zeros_like(img[:, :, 0])
         for out_obj_id, out_mask in video_segments[out_frame_idx].items():
             mask = (out_mask[0] > 0).astype(np.uint8) * 255
-            img = mask_painter(img, mask, mask_color=4 + out_obj_id)
+            # img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             msk[mask == 255] = out_obj_id
         img_to_video.append(img)
 

@@ -525,32 +525,28 @@ def _build_level_set_phi(
     return phi
 
 
-def keep_levelset_inside_to_white_outside(
-    img_path: str,
+import numpy as np
+from typing import Dict, Any, Tuple, List
+
+def build_levelset_mask(
     kp_dict: Dict[int, Any],
-    out_path: Optional[str] = None,
+    img_hw: Tuple[int, int],          # (H, W)
     # level-set geometry
     point_radius: float = 16.0,
     limb_radius: float = 20.0,
     edges: List[Tuple[int, int]] = SKELETON_EDGES,
-    # feather / gradient control (in pixels)
-    feather: float = 20.0,        # 0 -> hard cut; larger -> softer transition
-    gamma: float = 1.0,           # >1 makes edge whiter faster; <1 keeps more
-    bg_color_bgr: Tuple[int, int, int] = (255, 255, 255),
-) -> str:
+) -> np.ndarray:
     """
-    Build a level-set from kp_dict on the image coordinate system.
-    Keep inside region (phi<=0), make outside white.
-    Edge can be feathered to white using a smooth alpha based on phi.
+    Build a level-set from kp_dict and return a binary mask.
 
-    Returns: out_path (jpg)
+    Returns:
+        mask: np.ndarray, uint8, shape (1, H, W)
+              foreground = 255 (phi <= 0)
+              background = 0
     """
-    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-    if img is None:
-        raise FileNotFoundError(img_path)
-    H, W = img.shape[:2]
+    H, W = img_hw
 
-    # build phi on this image size
+    # build signed distance field phi
     phi = _build_level_set_phi(
         kp_dict=kp_dict,
         img_hw=(H, W),
@@ -559,29 +555,83 @@ def keep_levelset_inside_to_white_outside(
         edges=edges,
     )
 
-    # alpha: 1 inside, 0 outside, smooth around boundary
-    # We use a simple ramp based on phi:
-    #   phi<=0 -> alpha=1
-    #   phi>=feather -> alpha=0
-    #   between -> linear then gamma
-    if feather <= 0:
-        alpha = (phi <= 0).astype(np.float32)
-    else:
-        a = 1.0 - np.clip(phi / float(feather), 0.0, 1.0)  # inside(<=0)->1, far outside->0
-        if gamma != 1.0:
-            a = np.power(a, float(gamma))
-        alpha = a.astype(np.float32)
+    # foreground: inside level-set
+    mask = (phi <= 0).astype(np.uint8) * 255
 
-    # blend: out = alpha*img + (1-alpha)*white
-    bg = np.empty_like(img, dtype=np.float32)
-    bg[...] = np.array(bg_color_bgr, dtype=np.float32)
-    out = alpha[..., None] * img.astype(np.float32) + (1.0 - alpha[..., None]) * bg
-    out = np.clip(out, 0, 255).astype(np.uint8)
+    # add channel dim -> 1 x H x W
+    mask = mask[None, ...]
 
-    # write jpg
-    if out_path is None:
-        base, _ = os.path.splitext(img_path)
-        out_path = base + "_levelset_keep.jpg"
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    return mask
+
+
+import os
+import cv2
+import numpy as np
+from PIL import Image
+
+import os
+import cv2
+import numpy as np
+
+def paste_masked_region_from_a_to_b_np_mask(
+    mask_hw: np.ndarray,          # H x W, uint8, 255 fg / 0 bg
+    image_a_path: str,
+    image_b_path: str,
+    suffix: str = "_paste_from_a",
+) -> str:
+    """
+    Copy pixels from image A to image B where mask == 255.
+
+    Args:
+        mask_hw: np.ndarray (H, W), uint8, foreground=255, background=0
+        image_a_path: source image A
+        image_b_path: target image B
+        suffix: output filename suffix
+
+    Returns:
+        out_path: saved image path
+    """
+
+    # -------------------------
+    # validate mask
+    # -------------------------
+    if not isinstance(mask_hw, np.ndarray):
+        raise TypeError("mask_hw must be np.ndarray")
+    if mask_hw.ndim != 2:
+        raise ValueError(f"mask_hw must be HxW, got shape {mask_hw.shape}")
+    if mask_hw.dtype != np.uint8:
+        raise ValueError(f"mask_hw must be uint8, got {mask_hw.dtype}")
+
+    fg = (mask_hw == 255)
+
+    # -------------------------
+    # load images
+    # -------------------------
+    img_a = cv2.imread(image_a_path, cv2.IMREAD_COLOR)
+    img_b = cv2.imread(image_b_path, cv2.IMREAD_COLOR)
+
+    if img_a is None:
+        raise FileNotFoundError(image_a_path)
+    if img_b is None:
+        raise FileNotFoundError(image_b_path)
+
+    if img_a.shape[:2] != mask_hw.shape:
+        raise ValueError(f"Shape mismatch: img_a={img_a.shape[:2]} vs mask={mask_hw.shape}")
+    if img_b.shape[:2] != mask_hw.shape:
+        raise ValueError(f"Shape mismatch: img_b={img_b.shape[:2]} vs mask={mask_hw.shape}")
+
+    # -------------------------
+    # paste A -> B
+    # -------------------------
+    out = img_b.copy()
+    out[fg] = img_a[fg]
+
+    # -------------------------
+    # save to image A directory
+    # -------------------------
+    a_dir = os.path.dirname(image_a_path) or "."
+    a_base = os.path.splitext(os.path.basename(image_a_path))[0]
+    out_path = os.path.join(a_dir, f"{a_base}{suffix}.jpg")
+
     cv2.imwrite(out_path, out)
     return out_path

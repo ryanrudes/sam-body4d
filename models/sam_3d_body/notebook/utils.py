@@ -433,88 +433,94 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
 
         no_occ_outputs = estimator.process_frames(no_occ_image_batch, bboxes=no_occ_bbox_batch, masks=no_occ_mask_batch, id_batch=[[1] for idb in range(len(no_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=no_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, cam_int=cam_int)
         if len(_occ_image_batch) > 0:
-            import shutil
-            from .kps_utils import build_zero_neighbor_dict, build_body_keypoint_dict, find_topk_similar_points_on_a, visualize_topk_points_on_image, KINEMATIC_EDGES, draw_named_keypoints_on_image, KEY_POINT_NAME
-            from .opt_utils import select_keypoints_by_kinematic_dp, keep_common_add_id_and_stack
-            from .wrap_mask import keep_levelset_inside_to_white_outside #, debug_warp_with_only_your_data, DEBUG_WARP_LABEL_EQ_OBJID_ONCE
+            # import shutil
+            # from .kps_utils import build_zero_neighbor_dict, build_body_keypoint_dict, find_topk_similar_points_on_a, visualize_topk_points_on_image, KINEMATIC_EDGES, draw_named_keypoints_on_image, KEY_POINT_NAME
+            # from .opt_utils import select_keypoints_by_kinematic_dp, keep_common_add_id_and_stack
+            # from .wrap_mask import build_levelset_mask, paste_masked_region_from_a_to_b_np_mask #, debug_warp_with_only_your_data, DEBUG_WARP_LABEL_EQ_OBJID_ONCE
 
-            # 0. for each occ frame, select confident no_occ_frames (1 prev 1 after) (consider idx within batch)
-            bin_list = occ_dict[obj_id]
-            d = build_zero_neighbor_dict(bin_list, iou_dict[obj_id])
-            zero_indices = [i for i, v in enumerate(bin_list) if v == 0]
-            idx_11 = max(
-                (iii for iii, v in enumerate(iou_dict[obj_id]) if v != 1),
-                key=lambda iii: iou_dict[obj_id][iii]
-            )
+            # # 0. for each occ frame, select confident no_occ_frames (1 prev 1 after) (consider idx within batch)
+            # bin_list = occ_dict[obj_id]
+            # d = build_zero_neighbor_dict(bin_list, iou_dict[obj_id])
+            # zero_indices = [i for i, v in enumerate(bin_list) if v == 0]
+            # idx_11 = max(
+            #     (iii for iii, v in enumerate(iou_dict[obj_id]) if v != 1),
+            #     key=lambda iii: iou_dict[obj_id][iii]
+            # )
 
-            for kkk, vvv in d.items():
-                d[kkk] = [idx_11]
+            # for kkk, vvv in d.items():
+            #     d[kkk] = [idx_11]
 
-            # 1. load no_occ_frames (path & mask & keypoints)
+            # # 1. load no_occ_frames (path & mask & keypoints)
             
-            # 2. SAM-3 load ALL frames, encoding frame features
-            sam_path = []
-            si = 0
-            dst_dir = f"{os.path.dirname(os.path.dirname(image_path[0]))}/tmp_images"
-            os.makedirs(dst_dir, exist_ok=True)
-            for bi, bl in enumerate(bin_list):
-                if bl == 1:
-                    shutil.copy2(image_path[bi], os.path.join(dst_dir, os.path.basename(image_path[bi])))
-                    sam_path.append(os.path.join(dst_dir, os.path.basename(image_path[bi])))
-                else:
-                    shutil.copy2(_occ_image_batch[si], os.path.join(dst_dir, os.path.basename(_occ_image_batch[si])))
-                    sam_path.append(os.path.join(dst_dir, os.path.basename(_occ_image_batch[si])))
-                    si += 1
+            # # 2. SAM-3 load ALL frames, encoding frame features
+            # sam_path = []
+            # si = 0
+            # dst_dir = f"{os.path.dirname(os.path.dirname(image_path[0]))}/tmp_images"
+            # os.makedirs(dst_dir, exist_ok=True)
+            # for bi, bl in enumerate(bin_list):
+            #     if bl == 1:
+            #         shutil.copy2(image_path[bi], os.path.join(dst_dir, os.path.basename(image_path[bi])))
+            #         sam_path.append(os.path.join(dst_dir, os.path.basename(image_path[bi])))
+            #     else:
+            #         shutil.copy2(_occ_image_batch[si], os.path.join(dst_dir, os.path.basename(_occ_image_batch[si])))
+            #         sam_path.append(os.path.join(dst_dir, os.path.basename(_occ_image_batch[si])))
+            #         si += 1
 
-            inference_state = predictor.init_state(video_path=sam_path)
-            predictor.clear_all_points_in_video(inference_state)
+            # inference_state = predictor.init_state(video_path=sam_path)
+            # predictor.clear_all_points_in_video(inference_state)
             
-            # 3. for each occ frame, matching, get candidate keypoints
-            kp_list = []
-            for oi, occ_id in enumerate(zero_indices):
-                noc_id = d[occ_id][0]
-                with torch.no_grad():
-                    a = predictor._get_image_feature(inference_state, occ_id, 1)
-                    b = predictor._get_image_feature(inference_state, noc_id, 1)
-                # load keypoints
-                no_occ_output_idx = sum(bin_list[:noc_id])
-                kps = no_occ_outputs[no_occ_output_idx][0]['pred_keypoints_2d']
-                kps_dict = build_body_keypoint_dict(kps)
-                top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict, mask_path=mask_path[noc_id], obj_id=obj_id)
+            # # 3. for each occ frame, matching, get candidate keypoints
+            # kp_list = []
+            # for oi, occ_id in enumerate(zero_indices):
+            #     noc_id = d[occ_id][0]
+            #     with torch.no_grad():
+            #         a = predictor._get_image_feature(inference_state, occ_id, 1)
+            #         b = predictor._get_image_feature(inference_state, noc_id, 1)
+            #     # load keypoints
+            #     no_occ_output_idx = sum(bin_list[:noc_id])
+            #     kps = no_occ_outputs[no_occ_output_idx][0]['pred_keypoints_2d']
+            #     kps_dict = build_body_keypoint_dict(kps)
+            #     top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict, mask_path=mask_path[noc_id], obj_id=obj_id)
 
-            # kps = np.load('63.npy')
-            # kps_dict = build_body_keypoint_dict(kps)
-            # top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict)
-                visualize_topk_points_on_image(sam_path[occ_id], top3)
-                candidates = {idx: v["a_topk_xy"] for idx, v in top3.items()}
-                chosen_idx, chosen_xy = select_keypoints_by_kinematic_dp(
-                    template_kp_dict=kps_dict,
-                    candidates=candidates,
-                    edges=KINEMATIC_EDGES,
-                    lam=1.0,
-                    delta=10.0,
-                    unary=None,   # 先不加 unary，先跑通
-                )
-                chosen_kp_dict = {idx: {"xy": xy, "name": KEY_POINT_NAME.get(idx, str(idx))} for idx, xy in chosen_xy.items()}
-                draw_named_keypoints_on_image(sam_path[occ_id], chosen_kp_dict, save_path="chosen.jpg")
-                kp_list.append(chosen_kp_dict)
+            # # kps = np.load('63.npy')
+            # # kps_dict = build_body_keypoint_dict(kps)
+            # # top3 = find_topk_similar_points_on_a(a[1]['backbone_fpn'][-1], b[1]['backbone_fpn'][-1], kps_dict)
+            #     visualize_topk_points_on_image(sam_path[occ_id], top3)
+            #     candidates = {idx: v["a_topk_xy"] for idx, v in top3.items()}
+            #     chosen_idx, chosen_xy = select_keypoints_by_kinematic_dp(
+            #         template_kp_dict=kps_dict,
+            #         candidates=candidates,
+            #         edges=KINEMATIC_EDGES,
+            #         lam=1.0,
+            #         delta=10.0,
+            #         unary=None,   # 先不加 unary，先跑通
+            #     )
+            #     chosen_kp_dict = {idx: {"xy": xy, "name": KEY_POINT_NAME.get(idx, str(idx))} for idx, xy in chosen_xy.items()}
+            #     draw_named_keypoints_on_image(sam_path[occ_id], chosen_kp_dict, save_path="chosen.jpg")
+            #     kp_list.append(chosen_kp_dict)
 
-                # _occ_image_batch[oi] = keep_regions_around_keypoints_to_white_bg(
-                #     img_path=_occ_image_batch[oi],
-                #     kps_dict=chosen_kp_dict,
-                #     half_hw=(30, 30),   # 上下左右 50 像素
-                # )
+            #     # *****
+            #     _occ_mask_batch[oi] = build_levelset_mask(
+            #         kp_dict=chosen_kp_dict,
+            #         img_hw=(H, W)
+            #     )
+
+            #     _occ_image_batch[oi] = paste_masked_region_from_a_to_b_np_mask(
+            #         _occ_mask_batch[oi][0],
+            #         _occ_image_batch[oi],
+            #         image_path[occ_id],
+            #     )
+
+            #     # Find all non-zero pixels in the mask
+            #     coords = cv2.findNonZero(_occ_mask_batch[oi][0])
+            #     # Get bounding box from mask contours
+            #     x, y, w, h = cv2.boundingRect(coords)
+            #     bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
+            #     # print(f"Computed bbox from mask: {bbox[0]}")
+            #     _occ_bbox_batch[oi] = bbox.reshape(1, 1, 4)
 
                 # *****
-                # _occ_image_batch[oi] = keep_levelset_inside_to_white_outside(
-                #     img_path=_occ_image_batch[oi],
-                #     kp_dict=chosen_kp_dict,
-                #     point_radius=7,
-                #     limb_radius=20,
-                #     feather=25,   # 边缘渐变宽度（像素）
-                #     gamma=1.35,    # 渐变更偏白
-                # )
-                # *****
+            _occ_outputs = estimator.process_frames(_occ_image_batch, bboxes=_occ_bbox_batch, masks=_occ_mask_batch, id_batch=[[1] for idb in range(len(_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, _occ_image_batch_ori=_occ_image_batch_ori, cam_int=cam_int)
 
                 # print(new_path)
 
@@ -590,9 +596,9 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                 # mask_binary_cp = zero_mask_cp.astype(np.uint8)
                 # mask_binary_cp[:int(H*0.05), :] = mask_binary_cp[-int(H*0.05):, :] = mask_binary_cp[:, :int(W*0.05)] = mask_binary_cp[:, -int(W*0.05):] = 0
 
-            # _occ_outputs = estimator.process_frames(_occ_image_batch, bboxes=_occ_bbox_batch, masks=None, id_batch=[[1] for idb in range(len(_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=_occ_kps_batch, occ_dict=None, use_mask=False, kps_id=kps_id, _occ_image_batch_ori=_occ_image_batch_ori, cam_int=cam_int)
             
-            _occ_outputs = estimator.process_frames(_occ_image_batch, bboxes=_occ_bbox_batch, masks=_occ_mask_batch, id_batch=[[1] for idb in range(len(_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, _occ_image_batch_ori=_occ_image_batch_ori, cam_int=cam_int)
+            
+            # _occ_outputs = estimator.process_frames(_occ_image_batch, bboxes=_occ_bbox_batch, masks=_occ_mask_batch, id_batch=[[1] for idb in range(len(_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, _occ_image_batch_ori=_occ_image_batch_ori, cam_int=cam_int)
 
         oid_outputs = []
         ia, ib = 0, 0
@@ -625,7 +631,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
     return final_outputs, id_batch, empty_frame_list
 
 
-def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, flip=False):
+def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, flip=False, cam_int=None):
     """
     Process image with external mask input.
 
@@ -674,6 +680,6 @@ def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_di
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch, flip=flip)   # use_mask=False default
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch, flip=flip, cam_int=cam_int)   # use_mask=False default
 
     return outputs, id_batch, empty_frame_list

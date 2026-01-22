@@ -50,4 +50,4 @@ def jpg_folder_to_mp4(folder: str, output_filename: str, fps: int = 25):
     writer.release()
     print(f"Saved video to: {output_filename}")
 
-jpg_folder_to_mp4("/root/projects/sam-body4d/dancing", "example1.mp4")
+jpg_folder_to_mp4("/root/projects/sam-body4d/83924bdb", "example1.mp4")
