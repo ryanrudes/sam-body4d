@@ -29,6 +29,7 @@ def inference(args):
         predictor.OUTPUT_DIR = output_dir
         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
         frame_list = glob.glob(os.path.join(args.data_dir, 'imageFiles', seq, '*.jpg'))
+        seq_path = os.path.join(args.data_dir, 'imageFiles', seq)
         frame_list.sort()
         one_frame = Image.open(frame_list[0]).convert('RGB')
         width, height = one_frame.size
@@ -76,7 +77,7 @@ def inference(args):
             kps_list = None
 
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list, kps_list=kps_list)
+            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=kps_list)
 
 
 if __name__ == "__main__":

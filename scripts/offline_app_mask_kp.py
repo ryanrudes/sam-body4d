@@ -268,7 +268,7 @@ class OfflineApp:
             # img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
             msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
 
-    def on_4d_generation(self, images_list: str=None, kps_list=None, box_list=None):
+    def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None):
         """
         Placeholder for 4D generation.
         Later:
@@ -316,7 +316,7 @@ class OfflineApp:
             for obj_id in self.RUNTIME['out_obj_ids']:
                 modal_pixels, ori_shape = load_and_transform_masks(self.OUTPUT_DIR + "/masks", resolution=pred_res, obj_id=obj_id)
                 modal_pixels_list.append(modal_pixels)
-            rgb_pixels, _, raw_rgb_pixels = load_and_transform_rgbs(self.OUTPUT_DIR + "/images", resolution=pred_res)
+            rgb_pixels, _, raw_rgb_pixels = load_and_transform_rgbs(seq_path, resolution=pred_res)
             depth_pixels = rgb_to_depth(rgb_pixels, self.depth_model)
 
         mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
@@ -332,8 +332,6 @@ class OfflineApp:
 
             W, H = Image.open(batch_masks[0]).size
 
-        
-        
             # Optional, detect occlusions
             idx_dict = {}
             idx_path = {}
@@ -460,7 +458,7 @@ class OfflineApp:
                     completion_image_path = idx_path[obj_id]['images']
                     # prepare inputs
                     modal_pixels_current, ori_shape = load_and_transform_masks(self.OUTPUT_DIR + "/masks", resolution=pred_res_hi, obj_id=obj_id)
-                    rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(self.OUTPUT_DIR + "/images", resolution=pred_res_hi)
+                    rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(seq_path, resolution=pred_res_hi)
                     modal_pixels_current = modal_pixels_current[:, i:i + batch_size, :, :, :]
                     modal_pixels_current = modal_pixels_current[:, start:end]
                     pred_amodal_masks_current = pred_amodal_masks_dict[obj_id][start:end]
