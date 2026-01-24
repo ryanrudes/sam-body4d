@@ -6,7 +6,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
 
 # from offline_app import inference configs
-from offline_app_mask import *
+from offline_app_mask_kp import *
 
 
 def inference(args):
@@ -18,6 +18,7 @@ def inference(args):
     test_seq_name_list.sort()
     test_seq_name_list = [os.path.splitext(os.path.basename(tn))[0] for tn in test_seq_name_list]
     bboxes = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_bbx_xyxy_uint16.pt'))
+    kp = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_vid2kp2d.pt'))
 
     batch_size = 1000
 
@@ -64,8 +65,18 @@ def inference(args):
             predictor.on_mask_generation(start_frame_idx=i)
         # 4. hmr upon masks
 
+        kps_list = []
+        for obj_id in range(3):
+            try:
+                seq_name_with_id = f'{seq}_{obj_id}'
+                kps_list.append(kp[seq_name_with_id])
+            except:
+                break
+        if len(kps_list) == 0:
+            kps_list = None
+
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list, cam_int)
+            predictor.on_4d_generation(frame_list, kps_list=kps_list)
 
 
 if __name__ == "__main__":

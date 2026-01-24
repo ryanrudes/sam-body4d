@@ -256,17 +256,34 @@ def cap_consecutive_ones_by_iou(
     max_keep: int = 3,
 ) -> List[int]:
     """
-    输出规则：
-      - flag==0 -> 输出 1
-      - flag==1 -> 对每个连续 1 的段：
-          - 段长<=max_keep: 全部输出 1
-          - 段长>max_keep: 只保留该段内 iou 最大的 max_keep 个下标为 1，其余为 0
+    Output rule:
+      - If flag[i] == 0 -> output[i] = 1
+      - If flag[i] == 1 -> for each consecutive run of 1s:
+          - If run_length <= max_keep: keep all as 1
+          - If run_length >  max_keep: keep only the indices of the top `max_keep`
+            IoU values within the run as 1, set the rest to 0.
+            (Tie-breaking: if IoU is the same, prefer the smaller index for stability.)
+
+    Args:
+        flag: A 0/1 sequence indicating positions to be processed. Runs of consecutive 1s
+              are handled together.
+        iou:  A float sequence (same length as `flag`), used to rank elements inside each
+              run of consecutive 1s when the run is longer than `max_keep`.
+        max_keep: Maximum number of 1s to keep within any consecutive-ones run.
+
+    Returns:
+        out: A list of 0/1 integers with the same length as `flag`, following the rules above.
+
+    Raises:
+        ValueError: If `flag` and `iou` have different lengths.
     """
     n = len(flag)
     if len(iou) != n:
         raise ValueError(f"len(flag)={n} != len(iou)={len(iou)}")
 
-    # 先让 0 的位置全变 1；1 的位置先置 0，后续再按规则挑回 1
+    # Initialize:
+    # - positions where flag==0 are forced to 1
+    # - positions where flag==1 are set to 0 first, and will be selected back to 1 per-run
     out = [1 if flag[i] == 0 else 0 for i in range(n)]
 
     i = 0
@@ -275,17 +292,19 @@ def cap_consecutive_ones_by_iou(
             i += 1
             continue
 
-        # 找到一段连续的 1: [i, j)
+        # Find a consecutive run of 1s: [i, j)
         j = i
         while j < n and flag[j] == 1:
             j += 1
 
         run_idx = list(range(i, j))
         if len(run_idx) <= max_keep:
+            # Short run: keep all
             for k in run_idx:
                 out[k] = 1
         else:
-            # 段内选 iou 最大的 max_keep 个；同 iou 时按下标小的优先（稳定）
+            # Long run: keep top `max_keep` by IoU within the run.
+            # Sort by (-IoU, index) to ensure stable tie-breaking.
             top = sorted(run_idx, key=lambda k: (-float(iou[k]), k))[:max_keep]
             for k in top:
                 out[k] = 1

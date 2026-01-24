@@ -59,6 +59,72 @@ elif device.type == "mps":
     )
 
 
+from typing import List, Sequence
+
+def cap_consecutive_ones_by_iou(
+    flag: Sequence[int],
+    iou: Sequence[float],
+    max_keep: int = 3,
+) -> List[int]:
+    """
+    Output rule:
+      - If flag[i] == 0 -> output[i] = 1
+      - If flag[i] == 1 -> for each consecutive run of 1s:
+          - If run_length <= max_keep: keep all as 1
+          - If run_length >  max_keep: keep only the indices of the top `max_keep`
+            IoU values within the run as 1, set the rest to 0.
+            (Tie-breaking: if IoU is the same, prefer the smaller index for stability.)
+
+    Args:
+        flag: A 0/1 sequence indicating positions to be processed. Runs of consecutive 1s
+              are handled together.
+        iou:  A float sequence (same length as `flag`), used to rank elements inside each
+              run of consecutive 1s when the run is longer than `max_keep`.
+        max_keep: Maximum number of 1s to keep within any consecutive-ones run.
+
+    Returns:
+        out: A list of 0/1 integers with the same length as `flag`, following the rules above.
+
+    Raises:
+        ValueError: If `flag` and `iou` have different lengths.
+    """
+    n = len(flag)
+    if len(iou) != n:
+        raise ValueError(f"len(flag)={n} != len(iou)={len(iou)}")
+
+    # Initialize:
+    # - positions where flag==0 are forced to 1
+    # - positions where flag==1 are set to 0 first, and will be selected back to 1 per-run
+    out = [1 if flag[i] == 0 else 0 for i in range(n)]
+
+    i = 0
+    while i < n:
+        if flag[i] != 1:
+            i += 1
+            continue
+
+        # Find a consecutive run of 1s: [i, j)
+        j = i
+        while j < n and flag[j] == 1:
+            j += 1
+
+        run_idx = list(range(i, j))
+        if len(run_idx) <= max_keep:
+            # Short run: keep all
+            for k in run_idx:
+                out[k] = 1
+        else:
+            # Long run: keep top `max_keep` by IoU within the run.
+            # Sort by (-IoU, index) to ensure stable tie-breaking.
+            top = sorted(run_idx, key=lambda k: (-float(iou[k]), k))[:max_keep]
+            for k in top:
+                out[k] = 1
+
+        i = j
+
+    return out
+
+
 def build_sam3_from_config(cfg):
     """
     Construct and return your SAM-3 model from config.
@@ -240,8 +306,11 @@ class OfflineApp:
         n = len(images_list)
         
         # Optional, detect occlusions
-        pred_res = self.RUNTIME['detection_resolution']
-        pred_res_hi = self.RUNTIME['completion_resolution']
+        w, h = Image.open(images_list[0]).size
+        pred_res = [1024, 512] if h > w else [512, 1024] if h < w else [1024, 1024]
+        pred_res_hi = [1024, 512] if h > w else [512, 1024] if h < w else [1024, 1024]
+        # pred_res = self.RUNTIME['detection_resolution']
+        # pred_res_hi = self.RUNTIME['completion_resolution']
         modal_pixels_list = []
         if self.pipeline_mask is not None:
             for obj_id in self.RUNTIME['out_obj_ids']:
@@ -263,10 +332,13 @@ class OfflineApp:
 
             W, H = Image.open(batch_masks[0]).size
 
+        
+        
             # Optional, detect occlusions
             idx_dict = {}
             idx_path = {}
             occ_dict = {}
+            iou_dict = {}
             if len(modal_pixels_list) > 0:
                 print("detect occlusions ...")
                 pred_amodal_masks_dict = {}
@@ -303,6 +375,7 @@ class OfflineApp:
                     ious = []
                     masks_margin_shrink = [bm.copy() for bm in masks]
                     mask_H, mask_W = masks_margin_shrink[0].shape
+                    occlusion_threshold = 0.7
                     for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
                         # mute objects near margin
                         zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
@@ -310,14 +383,14 @@ class OfflineApp:
                         mask_binary_cp = zero_mask_cp.astype(np.uint8)
                         mask_binary_cp[:int(mask_H*0.05), :] = mask_binary_cp[-int(mask_H*0.05):, :] = mask_binary_cp[:, :int(mask_W*0.05)] = mask_binary_cp[:, -int(mask_W*0.05):] = 0
                         if mask_binary_cp.max() == 0:   # margin objects
-                            ious.append(1.0)
+                            ious.append(occlusion_threshold)
                             continue
                         area_a = (a > 0).sum()
                         area_b = (b > 0).sum()
                         if area_a == 0 and area_b == 0:
-                            ious.append(1.0)
+                            ious.append(occlusion_threshold)
                         elif area_a > area_b:
-                            ious.append(1.0)
+                            ious.append(occlusion_threshold)
                         else:
                             inter = np.logical_and(a > 0, b > 0).sum()
                             uni = np.logical_or(a > 0, b > 0).sum()
@@ -325,7 +398,7 @@ class OfflineApp:
                             ious.append(obj_iou)
 
                         if i == 0 and bi == 0:
-                            if ious[0] < 0.7:
+                            if ious[0] < occlusion_threshold:
                                 obj_ratio_dict[obj_id] = bbox_from_mask(b)
                             else:
                                 obj_ratio_dict[obj_id] = bbox_from_mask(a)
@@ -334,31 +407,37 @@ class OfflineApp:
                     for pi, pamc in enumerate(pred_amodal_masks_com):
                         # zero predictions, back to original masks
                         if masks[pi].sum() > pred_amodal_masks[pi].sum():
-                            ious[pi] = 1.0
+                            ious[pi] = occlusion_threshold
                             pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                         # elif len(obj_ratio_dict)>0 and not are_bboxes_similar(bbox_from_mask(pred_amodal_masks[pi]), obj_ratio_dict[obj_id]):
-                        #     ious[pi] = 1.0
+                        #     ious[pi] = occlusion_threshold
                         #     pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                         elif is_super_long_or_wide(pred_amodal_masks[pi], obj_id):
-                            ious[pi] = 1.0
+                            ious[pi] = occlusion_threshold
                             pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                         elif is_skinny_mask(pred_amodal_masks[pi]):
-                            ious[pi] = 1.0
+                            ious[pi] = occlusion_threshold
                             pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
                         # elif masks[pi].sum() == 0: # TODO: recover empty masks in future versions (to avoid severe fake completion)
-                        #     ious[pi] = 1.0
+                        #     ious[pi] = occlusion_threshold
                         #     pred_amodal_masks_com[pi] = resize_mask_with_unique_label(masks[pi], pred_res_hi[0], pred_res_hi[1], obj_id)
 
                     pred_amodal_masks_dict[obj_id] = pred_amodal_masks_com
 
                     # confirm occlusions & save masks (for HMR)
-                    start, end = (idxs := [ix for ix,x in enumerate(ious) if x < 0.7]) and (idxs[0], idxs[-1]) or (None, None)
+                    iou_dict[obj_id] = [float(iou_) for iou_ in ious]
+                    arr = iou_dict[obj_id][:]  # 拷贝，避免原地改
+                    for isb in range(1, len(arr) - 1):
+                        if arr[isb] == occlusion_threshold and arr[isb-1] < occlusion_threshold and arr[isb+1] < occlusion_threshold:
+                            arr[isb] = 0.0
 
-                    occ_dict[obj_id] = [1 if ix > 0.7 else 0 for ix in ious]
+                    iou_dict[obj_id] = arr  # ✅ 写回去
+                    occ_dict[obj_id] = [1 if ix >= occlusion_threshold else 0 for ix in iou_dict[obj_id]]
+                    start, end = (idxs := [ix for ix,x in enumerate(iou_dict[obj_id]) if x < occlusion_threshold]) and (idxs[0], idxs[-1]) or (None, None)
 
                     if start is not None and end is not None:
                         start = max(0, start-2)
-                        end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1]-1, end+2)
+                        end = min(modal_pixels[:, i:i + batch_size, :, :, :].shape[1], end+2)
                         idx_dict[obj_id] = (start, end)
                         completion_path = ''.join(random.choices('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=4))
                         completion_image_path = f'{self.OUTPUT_DIR}/completion/{completion_path}/images'
@@ -368,6 +447,8 @@ class OfflineApp:
                         idx_path[obj_id] = {'images': completion_image_path, 'masks': completion_masks_path}
                         # save completion masks
                         for idx_ in range(start, end):
+                            if occ_dict[obj_id][idx_] == 1: # only save heavy occluded results
+                                continue
                             mask_idx_ = pred_amodal_masks[idx_].copy()
                             mask_idx_[mask_idx_ > 0] = obj_id
                             mask_idx_ = Image.fromarray(mask_idx_).convert('P')
@@ -395,14 +476,17 @@ class OfflineApp:
                     modal_rgb_pixels = rgb_pixels_current * modal_obj_mask + modal_background
                     modal_rgb_pixels = modal_rgb_pixels * 2 - 1
 
+                    keep_idx = cap_consecutive_ones_by_iou(occ_dict[obj_id][start:end], iou_dict[obj_id][start:end])
+                    mask_idx = torch.tensor(keep_idx, device=modal_rgb_pixels.device).bool()
+
                     print("content completion by diffusion-vas ...")
                     # predict amodal rgb (content completion)
                     pred_amodal_rgb = self.pipeline_rgb(
-                        modal_rgb_pixels,
-                        pred_amodal_masks_tensor,
+                        modal_rgb_pixels[:, mask_idx],
+                        pred_amodal_masks_tensor[:, mask_idx],
                         height=pred_res_hi[0], # my_res[0]
                         width=pred_res_hi[1],  # my_res[1]
-                        num_frames=end-start,
+                        num_frames=sum(keep_idx),
                         decode_chunk_size=8,
                         motion_bucket_id=127,
                         fps=8,
@@ -412,22 +496,37 @@ class OfflineApp:
                         generator=self.generator,
                     ).frames[0]
 
-                    pred_amodal_rgb = [np.array(img) for img in pred_amodal_rgb]
+                    pred_i = 0
+                    save_i = start-1
+                    for keep_i, occ_i in zip(keep_idx, occ_dict[obj_id][start:end]):
+                        save_i += 1
+                        if occ_i == 1:
+                            if keep_i == 1:
+                                pred_i += 1
+                            continue
+                        if keep_i == 1:
+                            rgb_i = np.array(pred_amodal_rgb[pred_i]).astype('uint8')
+                            rgb_i = cv2.resize(rgb_i, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
+                            cv2.imwrite(os.path.join(completion_image_path, f"{save_i:08d}.jpg"), cv2.cvtColor(rgb_i, cv2.COLOR_RGB2BGR))
+                            pred_i += 1
+                            continue
 
-                    # save pred_amodal_rgb
-                    pred_amodal_rgb = np.array(pred_amodal_rgb).astype('uint8')
-                    pred_amodal_rgb_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
-                                                    for frame in pred_amodal_rgb])
-                    idx_ = start
-                    for img in pred_amodal_rgb_save:
-                        cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                        idx_ += 1
+                    # pred_amodal_rgb = [np.array(img) for img in pred_amodal_rgb]
+
+                    # # save pred_amodal_rgb
+                    # pred_amodal_rgb = np.array(pred_amodal_rgb).astype('uint8')
+                    # pred_amodal_rgb_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
+                    #                                 for frame in pred_amodal_rgb])
+                    # idx_ = start
+                    # for img in pred_amodal_rgb_save:
+                    #     cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                    #     idx_ += 1
 
             else:
                 for obj_id in self.RUNTIME['out_obj_ids']:
                     occ_dict[obj_id] = [1] * len(batch_masks)
 
-            batch_boxes = [bboxes[i:i + batch_size] for bboxes in box_list]
+            # batch_boxes = [bboxes[i:i + batch_size] for bboxes in box_list]
             batch_kps = None if kps_list is None else [kps[i:i + batch_size] for kps in kps_list]
 
             # Process with external mask
