@@ -20,7 +20,7 @@ sam_3d_body:
   mhr_path: ${paths.ckpt_root}/sam-3d-body-dinov3/assets/mhr_model.pt
   # download (fov_path): https://huggingface.co/Ruicheng/moge-2-vitl-normal
   fov_path: ${paths.ckpt_root}/moge-2-vitl-normal/model.pt
-  batch_size: 128
+  batch_size: 64
   detector_path: ""
   segmentor_path: ""
 
@@ -29,7 +29,7 @@ runtime:
 
 completion:
   enable: true
-  detection_resolution: [512, 1024]
+  detection_resolution: [256, 512]
   completion_resolution: [512, 1024]
   # download (xxx_mask & xxx_rgb): https://github.com/Kaihua-Chen/diffusion-vas?tab=readme-ov-file#download-checkpoints
   model_path_mask: ${paths.ckpt_root}/diffusion-vas-amodal-segmentation
