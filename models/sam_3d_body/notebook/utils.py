@@ -505,11 +505,11 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
                     img_hw=(H, W)
                 )
 
-                paste_masked_region_from_a_to_b_np_mask(
-                    _occ_mask_batch[oi][0],
-                    _occ_image_batch[oi],
-                    image_path[occ_id],
-                )
+                # paste_masked_region_from_a_to_b_np_mask(
+                #     _occ_mask_batch[oi][0],
+                #     _occ_image_batch[oi],
+                #     image_path[occ_id],
+                # )
 
                 # Find all non-zero pixels in the mask
                 coords = cv2.findNonZero(_occ_mask_batch[oi][0])

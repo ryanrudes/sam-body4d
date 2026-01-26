@@ -565,7 +565,7 @@ class OfflineApp:
                     completion_mask_path = idx_path[obj_id]['masks']
                     # # prepare inputs
                     modal_pixels_current, ori_shape = load_and_transform_masks(self.OUTPUT_DIR + "/masks", resolution=pred_res_hi, obj_id=obj_id)
-                    rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(self.OUTPUT_DIR + "/images", resolution=pred_res_hi)
+                    rgb_pixels_current, _, raw_rgb_pixels_current = load_and_transform_rgbs(seq_path, resolution=pred_res_hi)
                     depth_pixels = rgb_to_depth(rgb_pixels_current, self.depth_model)
                     modal_pixels_current = modal_pixels_current[:, i:i + batch_size, :, :, :]
                     modal_pixels_current = modal_pixels_current[:, start:end]

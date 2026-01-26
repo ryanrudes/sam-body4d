@@ -525,7 +525,7 @@ def on_mask_generation(video_path: str):
         msk = np.zeros_like(img[:, :, 0])
         for out_obj_id, out_mask in video_segments[out_frame_idx].items():
             mask = (out_mask[0] > 0).astype(np.uint8) * 255
-            # img = mask_painter(img, mask, mask_color=4 + out_obj_id)
+            img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             msk[mask == 255] = out_obj_id
         img_to_video.append(img)
 
@@ -972,38 +972,15 @@ def on_4d_generation(video_path: str):
                         cv2.imwrite(os.path.join(completion_image_path, f"{save_i:08d}.jpg"), cv2.cvtColor(rgb_i, cv2.COLOR_RGB2BGR))
                         pred_i += 1
                         continue
-
-                # pred_amodal_rgb = [np.array(img) for img in pred_amodal_rgb]
-
-                # # save pred_amodal_rgb
-                # pred_amodal_rgb = np.array(pred_amodal_rgb).astype('uint8')
-                # pred_amodal_rgb_save = np.array([cv2.resize(frame, (ori_shape[1], ori_shape[0]), interpolation=cv2.INTER_LINEAR)
-                #                                 for frame in pred_amodal_rgb])
-                # idx_ = start
-                # for img in pred_amodal_rgb_save:
-                #     cv2.imwrite(os.path.join(completion_image_path, f"{idx_:08d}.jpg"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                #     idx_ += 1
-
         else:
             for obj_id in RUNTIME['out_obj_ids']:
                 occ_dict[obj_id] = [1] * len(batch_masks)
 
         # Process with external mask
-
         print("Running FOV estimator ...")
         input_image = np.array(Image.open(batch_images[0])).astype('uint8')
         cam_int = sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, iou_dict=iou_dict, predictor=predictor)
-        
-        # # for completed frames (33)
-        # if len(batch_images) == 64:
-        #     batch_kps = [torch.from_numpy(np.load("1.npy")).unsqueeze(0)]
-        #     # bbox = mask_png_to_bbox_xyxy("/root/projects/sam-body4d/outputs/20260118_195759_383_cb108cb4/completion/TA42/masks/00000000.png", obj_id = 1)
-        #     # # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]})
-        #     # # mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_bbox(sam3_3d_body_model, [batch_images[0]], [torch.tensor(bbox).unsqueeze(0)], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps)
-        #     mask_outputs_, id_batch_, empty_frame_list_ = process_image_with_mask(sam3_3d_body_model, [batch_images[0]], [batch_masks[0]], idx_path, idx_dict, mhr_shape_scale_dict, {1:[1]}, batch_kps=batch_kps, kps_id = [0])
-        #     mask_outputs[0] = mask_outputs_[0]
-        #     # a = 1
 
         num_empth_ids = 0
         for frame_id in range(len(batch_images)):
