@@ -455,7 +455,7 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             # 2. SAM-3 load ALL frames, encoding frame features
             sam_path = []
             si = 0
-            dst_dir = f"{os.path.dirname(os.path.dirname(image_path[0]))}/tmp_images"
+            dst_dir = f"{os.path.dirname(idx_path[obj_id]['masks'])}/tmp_images"
             os.makedirs(dst_dir, exist_ok=True)
             for bi, bl in enumerate(bin_list):
                 if bl == 1:

@@ -665,7 +665,7 @@ class OfflineApp:
             batch_kps = None if kps_list is None else [kps[i:i + batch_size] for kps in kps_list]
 
             # Process with external mask
-            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, batch_kps=batch_kps, iou_dict=iou_dict)
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, batch_kps=batch_kps, iou_dict=iou_dict, predictor=self.predictor)
             
             num_empth_ids = 0
             for frame_id in range(len(batch_images)):
