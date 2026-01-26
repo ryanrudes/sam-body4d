@@ -25,7 +25,7 @@ def inference(args):
     # inference
     for seq in tqdm(test_seq_name_list):
         # 0. init outputs
-        if seq=='downtown_arguing_00':
+        if seq=='downtown_arguing_00' or seq=='downtown_bar_00':
             continue
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir

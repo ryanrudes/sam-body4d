@@ -431,7 +431,8 @@ def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path
             no_occ_kps_batch = None
             _occ_kps_batch = None
 
-        no_occ_outputs = estimator.process_frames(no_occ_image_batch, bboxes=no_occ_bbox_batch, masks=no_occ_mask_batch, id_batch=[[1] for idb in range(len(no_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=no_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, cam_int=cam_int)
+        if len(no_occ_image_batch) > 0:
+            no_occ_outputs = estimator.process_frames(no_occ_image_batch, bboxes=no_occ_bbox_batch, masks=no_occ_mask_batch, id_batch=[[1] for idb in range(len(no_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=no_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, cam_int=cam_int)
         if len(_occ_image_batch) > 0:
             import shutil
             from .kps_utils import build_zero_neighbor_dict, build_body_keypoint_dict, find_topk_similar_points_on_a, visualize_topk_points_on_image, KINEMATIC_EDGES, draw_named_keypoints_on_image, KEY_POINT_NAME

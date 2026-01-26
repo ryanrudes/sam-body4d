@@ -656,7 +656,6 @@ class OfflineApp:
             
                 idx_dict = idx_dict or None
                 idx_path = idx_path or None
-                occ_dict = occ_dict or None
                 iou_dict = iou_dict or None
                 for obj_id in self.RUNTIME['out_obj_ids']:
                     occ_dict[obj_id] = [1] * len(batch_masks)
