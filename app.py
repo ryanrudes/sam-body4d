@@ -834,6 +834,10 @@ def on_4d_generation(video_path: str):
     mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
     obj_ratio_dict = {}         # avoid fake completion by obj ratio on the first frame
 
+    print("Running FOV estimator ...")
+    input_image = np.array(Image.open(images_list[0])).astype('uint8')
+    cam_int = sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
+
     for i in tqdm(range(0, n, batch_size)):
         batch_images = images_list[i:i + batch_size]
         batch_masks  = masks_list[i:i + batch_size]
@@ -977,9 +981,6 @@ def on_4d_generation(video_path: str):
                 occ_dict[obj_id] = [1] * len(batch_masks)
 
         # Process with external mask
-        print("Running FOV estimator ...")
-        input_image = np.array(Image.open(batch_images[0])).astype('uint8')
-        cam_int = sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, iou_dict=iou_dict, predictor=predictor)
 
         num_empth_ids = 0
