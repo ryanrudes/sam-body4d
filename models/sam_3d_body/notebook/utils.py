@@ -288,103 +288,186 @@ def display_results_grid(
     plt.show()
 
 
-def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict):
+def process_image_with_mask(estimator, image_path: str, mask_path: str, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, kps_id=None, cam_int=None, iou_dict=None, predictor=None):
     """
     Process image with external mask input.
 
     Note: The refactored code requires bboxes to be provided along with masks.
     This function automatically computes bboxes from the mask.
     """
-    # load in batches
-    image_batch = []
-    bbox_batch = []
-    mask_batch = []
-    n = len(image_path)
+    n_frames = len(image_path)
+    obj_ids = sorted(map(int, occ_dict.keys()))
+    empty_dict = {}
+    id_batch = []
+    mask_outputs_dict = {}
+
+    # infer per object
+    for obj_id in obj_ids:
+        # prepare data (HMR for non-occ first, followed by occ)
+        # load in batches
+        no_occ_image_batch = []
+        no_occ_bbox_batch = []
+        no_occ_mask_batch = []
+        no_occ_kps_batch = []
+        no_occ_id_batch = []
+        no_occ_empty_frame_list = []
+        _occ_image_batch = []
+        _occ_bbox_batch = []
+        _occ_mask_batch = []
+        _occ_kps_batch = []
+        _occ_image_batch_ori = []
+        _occ_id_batch = []
+        _occ_empty_frame_list = []
+
+        occ_idx = occ_dict[obj_id]
+        # for each frame:
+        for i in range(n_frames):
+            # Load mask
+            mask = np.array(Image.open(mask_path[i]).convert('P'))
+
+            no_occ_mask_list = []
+            no_occ_bbox_list = []
+            no_occ_kp_list = []
+            no_occ_id_current = []
+            _occ_mask_list = []
+            _occ_bbox_list = []
+            _occ_kp_list = []
+            _occ_id_current = []
+
+            if occ_idx[i] == 0:
+                if kps_id is not None:
+                    mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{kps_id[0]:08d}.png")).convert('P'))     
+                else:
+                    mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{i:08d}.png")).convert('P')) 
+                zero_mask = np.zeros_like(mask_com)
+                zero_mask[mask_com==obj_id] = 255
+                mask_binary = zero_mask.astype(np.uint8)
+                _occ_mask_list.append(mask_binary)
+                # Compute bounding box from mask (required by refactored code)
+                # Find all non-zero pixels in the mask
+                coords = cv2.findNonZero(mask_binary)
+                if mask_binary.max() > 0:
+                    _occ_id_current.append(obj_id)
+                # Get bounding box from mask contours
+                x, y, w, h = cv2.boundingRect(coords)
+                bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
+                # print(f"Computed bbox from mask: {bbox[0]}")
+                _occ_bbox_list.append(bbox)
+                if batch_kps is not None:
+                    _occ_kp_list.append(batch_kps[obj_id-1][i])  # N x 3
+                
+                if len(_occ_bbox_list) == 0:
+                    _occ_empty_frame_list.append(i)
+                else:
+                    _occ_id_batch.append(_occ_id_current)
+                    bbox = np.stack(_occ_bbox_list, axis=0)  # TODO: sometimes empty
+                    if batch_kps is not None:
+                        _occ_kps_batch.append(np.stack(_occ_kp_list, axis=0))
+                    mask_binary = np.stack(_occ_mask_list, axis=0)
+                    # Process with external mask and computed bbox
+                    # Note: The mask needs to match the number of bboxes (1 bbox -> 1 mask)
+                    _occ_image_batch.append(os.path.join(idx_path[obj_id]['images'], f"{i:08d}.jpg"))
+                    _occ_image_batch_ori.append(image_path[i])
+                    _occ_mask_batch.append(mask_binary)
+                    _occ_bbox_batch.append(bbox)
+            else:
+                zero_mask = np.zeros_like(mask)
+                zero_mask[mask==obj_id] = 255
+                mask_binary = zero_mask.astype(np.uint8)
+
+                # mute objects near margin
+                H, W = mask_binary.shape
+                zero_mask_cp = np.zeros_like(mask)
+                zero_mask_cp[mask==obj_id] = 255
+                mask_binary_cp = zero_mask_cp.astype(np.uint8)
+                mask_binary_cp[:int(H*0.05), :] = mask_binary_cp[-int(H*0.05):, :] = mask_binary_cp[:, :int(W*0.05)] = mask_binary_cp[:, -int(W*0.05):] = 0
+                if mask_binary_cp.max() == 0:   # margin objects
+                    mask_binary = mask_binary_cp
+
+                no_occ_mask_list.append(mask_binary)
+                # Compute bounding box from mask (required by refactored code)
+                # Find all non-zero pixels in the mask
+                coords = cv2.findNonZero(mask_binary)
+                
+                if mask_binary.max() > 0:
+                    no_occ_id_current.append(obj_id)
+
+                # Get bounding box from mask contours
+                x, y, w, h = cv2.boundingRect(coords)
+                bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
+
+                # print(f"Computed bbox from mask: {bbox[0]}")
+                no_occ_bbox_list.append(bbox)
+                if batch_kps is not None:
+                    no_occ_kp_list.append(batch_kps[obj_id-1][i])  # N x 3
+
+                if len(no_occ_bbox_list) == 0:
+                    no_occ_empty_frame_list.append(i)
+                else:
+                    no_occ_id_batch.append(no_occ_id_current)
+                    bbox = np.stack(no_occ_bbox_list, axis=0)  # TODO: sometimes empty
+                    if batch_kps is not None:
+                        no_occ_kps_batch.append(np.stack(no_occ_kp_list, axis=0))
+                    mask_binary = np.stack(no_occ_mask_list, axis=0)
+                    # Process with external mask and computed bbox
+                    # Note: The mask needs to match the number of bboxes (1 bbox -> 1 mask)
+                    no_occ_image_batch.append(image_path[i])
+                    no_occ_mask_batch.append(mask_binary)
+                    no_occ_bbox_batch.append(bbox)
+
+        if len(no_occ_empty_frame_list) > 0:
+            for occ_k, occ_v in occ_dict.items():
+                for i in sorted(no_occ_empty_frame_list, reverse=True):
+                    occ_v.pop(i)
+        if len(_occ_empty_frame_list) > 0:
+            for occ_k, occ_v in occ_dict.items():
+                for i in sorted(_occ_empty_frame_list, reverse=True):
+                    occ_v.pop(i)
+
+        empty_dict[f"{obj_id}-occ"] = _occ_empty_frame_list
+        empty_dict[f"{obj_id}-no_occ"] = no_occ_empty_frame_list
+
+        if batch_kps is None:
+            no_occ_kps_batch = None
+            _occ_kps_batch = None
+
+        if len(no_occ_image_batch) > 0:
+            no_occ_outputs = estimator.process_frames(no_occ_image_batch, bboxes=no_occ_bbox_batch, masks=no_occ_mask_batch, id_batch=[[1] for idb in range(len(no_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=no_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, cam_int=cam_int)
+        if len(_occ_image_batch) > 0:
+            _occ_outputs = estimator.process_frames(_occ_image_batch, bboxes=_occ_bbox_batch, masks=_occ_mask_batch, id_batch=[[1] for idb in range(len(_occ_image_batch))], idx_path={}, idx_dict={}, mhr_shape_scale_dict=mhr_shape_scale_dict, kps_batch=_occ_kps_batch, occ_dict=None, use_mask=True, kps_id=kps_id, _occ_image_batch_ori=_occ_image_batch_ori, cam_int=cam_int)
+        
+        oid_outputs = []
+        ia, ib = 0, 0
+        for oi in occ_idx:
+            if oi == 1:
+                oid_outputs.append(no_occ_outputs[ia])
+                ia += 1
+            else:
+                oid_outputs.append(_occ_outputs[ib])
+                ib += 1
+        
+        mask_outputs_dict[obj_id] = oid_outputs
+
+    final_outputs = []
     id_batch = []
     empty_frame_list = []
-    for i in range(n):
-        # Load mask
-        mask = np.array(Image.open(mask_path[i]).convert('P'))
-        obj_ids = np.unique(mask)
-        obj_ids = obj_ids[obj_ids != 0].astype(int).tolist()
+    for i in range(n_frames):
+        i_outputs = []
+        i_batch = []
+        for obj_id in obj_ids:  # sorted
+            if mask_outputs_dict[obj_id][i][0]['bbox'][0]+mask_outputs_dict[obj_id][i][0]['bbox'][2] > 0:   # 0 0 0 0 (no objects)
+                i_outputs.append(mask_outputs_dict[obj_id][i][0])   # always = 1
+                i_batch.append(obj_id)
 
-        mask_list = []
-        bbox_list = []
-        id_current = []
-        for obj_id in obj_ids:
-
-            if obj_id in idx_dict:
-                start, end = idx_dict[obj_id]
-                if i >= start and i < end:
-                    mask_com = np.array(Image.open(os.path.join(idx_path[obj_id]['masks'], f"{i:08d}.png")).convert('P')) 
-                    zero_mask = np.zeros_like(mask_com)
-                    zero_mask[mask_com==obj_id] = 255
-                    mask_binary = zero_mask.astype(np.uint8)
-                    mask_list.append(mask_binary)
-                    # Compute bounding box from mask (required by refactored code)
-                    # Find all non-zero pixels in the mask
-                    coords = cv2.findNonZero(mask_binary)
-                    if mask_binary.max() > 0:
-                        id_current.append(obj_id)
-                    # Get bounding box from mask contours
-                    x, y, w, h = cv2.boundingRect(coords)
-                    bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
-                    # print(f"Computed bbox from mask: {bbox[0]}")
-                    bbox_list.append(bbox)
-                    continue
-            
-            zero_mask = np.zeros_like(mask)
-            zero_mask[mask==obj_id] = 255
-            mask_binary = zero_mask.astype(np.uint8)
-
-            # mute objects near margin
-            H, W = mask_binary.shape
-            zero_mask_cp = np.zeros_like(mask)
-            zero_mask_cp[mask==obj_id] = 255
-            mask_binary_cp = zero_mask_cp.astype(np.uint8)
-            mask_binary_cp[:int(H*0.05), :] = mask_binary_cp[-int(H*0.05):, :] = mask_binary_cp[:, :int(W*0.05)] = mask_binary_cp[:, -int(W*0.05):] = 0
-            if mask_binary_cp.max() == 0:   # margin objects
-                mask_binary = mask_binary_cp
-
-            mask_list.append(mask_binary)
-            # Compute bounding box from mask (required by refactored code)
-            # Find all non-zero pixels in the mask
-            coords = cv2.findNonZero(mask_binary)
-            
-            if mask_binary.max() > 0:
-                id_current.append(obj_id)
-
-            # Get bounding box from mask contours
-            x, y, w, h = cv2.boundingRect(coords)
-            bbox = np.array([[x, y, x + w, y + h]], dtype=np.float32)
-
-            # print(f"Computed bbox from mask: {bbox[0]}")
-            bbox_list.append(bbox)
-
-        if len(bbox_list) == 0:
+        final_outputs.append(i_outputs)
+        id_batch.append(i_batch)
+        if len(i_batch) == 0:
             empty_frame_list.append(i)
-            continue
 
-        id_batch.append(id_current)
-        bbox = np.stack(bbox_list, axis=0)  # TODO: sometimes empty
-        mask_binary = np.stack(mask_list, axis=0)
-        # Process with external mask and computed bbox
-        # Note: The mask needs to match the number of bboxes (1 bbox -> 1 mask)
-        image_batch.append(image_path[i])
-        mask_batch.append(mask_binary)
-        bbox_batch.append(bbox)
-    
-    if len(empty_frame_list) > 0:
-        for occ_k, occ_v in occ_dict.items():
-            for i in sorted(empty_frame_list, reverse=True):
-                occ_v.pop(i)
-
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=mask_batch, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, use_mask=True)
-
-    return outputs, id_batch, empty_frame_list
+    return final_outputs, id_batch, empty_frame_list
 
 
-def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None):
+def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, batch_kps=None, flip=False, cam_int=None):
     """
     Process image with external mask input.
 
@@ -433,6 +516,6 @@ def process_image_with_bbox(estimator, image_path: str, bboxes, idx_path, idx_di
             for i in sorted(empty_frame_list, reverse=True):
                 occ_v.pop(i)
 
-    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch)   # use_mask=False default
+    outputs = estimator.process_frames(image_batch, bboxes=bbox_batch, masks=None, id_batch=id_batch, idx_path=idx_path, idx_dict=idx_dict, mhr_shape_scale_dict=mhr_shape_scale_dict, occ_dict=occ_dict, kps_batch=kps_batch, flip=flip, cam_int=cam_int)   # use_mask=False default
 
     return outputs, id_batch, empty_frame_list
