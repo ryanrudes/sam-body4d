@@ -214,7 +214,7 @@ def mask_completion_and_iou_init(pred_amodal_masks, pred_res, obj_id, batch_mask
     ious = []
     masks_margin_shrink = [bm.copy() for bm in masks]
     mask_H, mask_W = masks_margin_shrink[0].shape
-    occlusion_threshold = 0.55
+    occlusion_threshold = 0.4
     for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
         # mute objects near margin
         zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
@@ -304,7 +304,7 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     ious = []
     masks_margin_shrink = [bm.copy() for bm in masks]
     mask_H, mask_W = masks_margin_shrink[0].shape
-    occlusion_threshold = 0.65
+    occlusion_threshold = 0.5
     for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
         # mute objects near margin
         zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
