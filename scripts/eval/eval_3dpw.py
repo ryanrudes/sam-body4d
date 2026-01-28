@@ -175,7 +175,7 @@ if __name__ == "__main__":
                 mhr_vertices += 100.0 * concatenated_sam3d_outputs["pred_cam_t"]
                 mhr_vertices_list.append(mhr_vertices[0])
             except Exception as e:
-                print(e)
+                # print(e)
                 mhr_vertices_list.append(mhr_vertices_list[-1])
     
         mhr_vertices = np.stack(mhr_vertices_list, axis=0)

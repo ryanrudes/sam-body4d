@@ -124,12 +124,10 @@ class MetricMocap:
             mode = "a" if os.path.exists(save_path) else "w"
             with open(save_path, mode, newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow([vid] + list(camcoord_metrics['pa_mpjpe']))
-            
-            mode = "a" if os.path.exists(save_path) else "w"
-            with open(save_path, mode, newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([vid] + list(camcoord_metrics['pve']))
+                writer.writerow([vid, 'pa_mpjpe', camcoord_metrics['pa_mpjpe'].mean()] + list(camcoord_metrics['pa_mpjpe']))
+                writer.writerow([vid, 'mpjpe', camcoord_metrics['mpjpe'].mean()] + list(camcoord_metrics['mpjpe']))
+                writer.writerow([vid, 'pve', camcoord_metrics['pve'].mean()] + list(camcoord_metrics['pve']))
+                writer.writerow([vid, 'accel', camcoord_metrics['accel'].mean()] + list(camcoord_metrics['accel']))
 
         metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items()}
         print(metrics_avg)
