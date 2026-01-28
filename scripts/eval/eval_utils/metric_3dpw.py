@@ -132,8 +132,6 @@ class MetricMocap:
         metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items()}
         print(metrics_avg)
 
-        # a = 1
-
         # if True:  # Render incam (simple)
         #     meta_render = batch["meta_render"]
         #     images = read_video_np(meta_render["video_path"], scale=meta_render["ds"])

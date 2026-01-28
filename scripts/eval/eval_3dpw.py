@@ -23,7 +23,7 @@ from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
 from eval_utils.std import suppress_stdout_stderr
 # from eval.flip_mhr import decode_joint_params
 
-from eval_utils.smooth import smpl_to_smpl_decode_o6dp
+from eval_utils.smooth import postprocess_smpl_params
 from eval.eval_utils.smooth_utils.geometry import (
     rot6d_to_rotation_matrix,
     smooth_with_savgol,
@@ -106,6 +106,8 @@ if __name__ == "__main__":
 
     result_path = args.result_path
     save_path = args.save_path
+    if args.save_path == '':
+        save_path = None
     # os.makedirs(save_path, exist_ok=True)
 
     # init dataset and metric evaluator
@@ -405,115 +407,9 @@ if __name__ == "__main__":
             )
             smpl_params = smpl_params_avg
 
-        # smooth_results = smpl_to_smpl_decode_o6dp(smpl_params['global_orient'].unsqueeze(0),smpl_params['body_pose'].unsqueeze(0),smpl_params['transl'].unsqueeze(0))
-        # smpl_params['global_orient'] = smooth_results['global_orient'].squeeze(0)
-        # smpl_params['body_pose'] = smooth_results['body_pose'].squeeze(0)
-        # smpl_params['transl'] = smooth_results['transl'].squeeze(0)
-
-        # import math
-
-        # # Inputs:
-        # # mask: (L,) bool
-        # # smpl_params['global_orient']: (L, 3)
-        # # smpl_params['body_pose']:     (L, 63)
-        # # smpl_params['transl']:        (L, 3)
-        # # axis_angle_to_rotation_matrix
-        # # smpl_to_smpl_decode_o6dp
-
-        # SOFT_THR = 10.0   # degrees
-        # HARD_THR = 20.0   # degrees
-
-        # mask = meta_data["mask"].bool()
-        # L = mask.shape[0]
-
-        # # work on detached copies
-        # go = smpl_params["global_orient"].detach().clone()
-        # bp = smpl_params["body_pose"].detach().clone()
-        # tr = smpl_params["transl"].detach().clone()
-
-        # # --------------------------------------------------
-        # # 1) split into contiguous True segments
-        # # --------------------------------------------------
-        # segments = []
-        # start = None
-        # for i in range(L):
-        #     if mask[i] and start is None:
-        #         start = i
-        #     elif (not mask[i]) and start is not None:
-        #         segments.append((start, i - 1))
-        #         start = None
-        # if start is not None:
-        #     segments.append((start, L - 1))
-
-        # # --------------------------------------------------
-        # # helper: per-frame root rotation change (degrees)
-        # # --------------------------------------------------
-        # def root_angle_deg(go_seg):
-        #     """
-        #     go_seg: (T, 3) axis-angle
-        #     return: (T-1,) degrees
-        #     """
-        #     R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
-        #     R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
-        #     trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
-        #     cos = (trace - 1.0) / 2.0
-        #     cos = torch.clamp(cos, -1.0, 1.0)
-        #     return torch.acos(cos) * (180.0 / math.pi)
-
-        # # --------------------------------------------------
-        # # 2) detect spikes in each segment and copy previous
-        # # --------------------------------------------------
-        # with torch.no_grad():
-        #     for s, e in segments:
-        #         T = e - s + 1
-        #         if T < 3:
-        #             continue
-
-        #         ang = root_angle_deg(go[s:e+1])   # (T-1,)
-
-        #         for t in range(1, T - 1):
-        #             a_prev = ang[t - 1].item()
-        #             a_next = ang[t].item()
-
-        #             # spike pattern: one large jump, neighbor small
-        #             if (a_prev > HARD_THR and a_next < SOFT_THR) or \
-        #             (a_next > HARD_THR and a_prev < SOFT_THR):
-
-        #                 abs_t = s + t
-        #                 go[abs_t] = go[abs_t - 1]
-        #                 bp[abs_t] = bp[abs_t - 1]
-        #                 tr[abs_t] = tr[abs_t - 1]
-
-        # # write back de-spiked sequence
-        # smpl_params["global_orient"] = go
-        # smpl_params["body_pose"] = bp
-        # smpl_params["transl"] = tr
-
-        # # --------------------------------------------------
-        # # 3) final smoothing (your original 4 lines)
-        # # --------------------------------------------------
-        # with torch.no_grad():
-        #     for s, e in segments:
-        #         T = e - s + 1
-        #         if T < 2:
-        #             continue
-
-        #         # smpl_to_smpl_decode_o6dp internally uses savgol(window_length=11),
-        #         # so only enable smoothing when the segment is long enough.
-        #         use_smooth = (T >= 11)
-        #         if not use_smooth:
-        #             continue
-
-        #         smooth_results = smpl_to_smpl_decode_o6dp(
-        #             smpl_params["global_orient"][s:e+1].unsqueeze(0),
-        #             smpl_params["body_pose"][s:e+1].unsqueeze(0),
-        #             smpl_params["transl"][s:e+1].unsqueeze(0),
-        #             should_apply_smooothing=use_smooth,
-        #         )
-
-        #         smpl_params["global_orient"][s:e+1] = smooth_results["global_orient"].squeeze(0)
-        #         smpl_params["body_pose"][s:e+1] = smooth_results["body_pose"].squeeze(0)
-        #         smpl_params["transl"][s:e+1] = smooth_results["transl"].squeeze(0)
+        smpl_params = postprocess_smpl_params(
+            smpl_params,
+        )
 
         # torch.save(smpl_params, f'{save_path}/{seq_name}_{obj_id}_tensor_dict.pth')
         metric_3dpw.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)
