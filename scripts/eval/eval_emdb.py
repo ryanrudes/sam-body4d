@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
     result_path = args.result_path
     save_path = args.save_path
-    os.makedirs(save_path, exist_ok=True)
+    # os.makedirs(save_path, exist_ok=True)
 
     # init dataset and metric evaluator
     dataset_emdb = EmdbSmplFullSeqDataset(label_path=args.label_path)
