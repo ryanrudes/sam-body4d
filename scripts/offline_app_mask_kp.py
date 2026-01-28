@@ -151,7 +151,7 @@ def read_frame_at(path: str, idx: int):
     return Image.fromarray(frame)
 
 
-def build_sam3_3d_body_config(cfg):
+def build_sam3_3d_body_config(cfg,human_detector=None):
     mhr_path = cfg.sam_3d_body['mhr_path']
     fov_path = cfg.sam_3d_body['fov_path']
     detector_path = cfg.sam_3d_body['detector_path']
@@ -160,7 +160,7 @@ def build_sam3_3d_body_config(cfg):
         cfg.sam_3d_body['ckpt_path'], device=device, mhr_path=mhr_path
     )
     
-    human_detector, human_segmentor, fov_estimator = None, None, None
+    human_segmentor, fov_estimator = None, None
     from models.sam_3d_body.tools.build_fov_estimator import FOVEstimator
     fov_estimator = FOVEstimator(name='moge2', device=device, path=fov_path)
     from models.sam_3d_body.tools.build_detector import HumanDetector
@@ -381,17 +381,22 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     return iou_dict_obj_id, occ_dict_obj_id, final_pred_amodal_masks_com
 
 class OfflineApp:
-    def __init__(self, config_path: str = os.path.join(ROOT, "configs", "body4d.yaml")):
+    def __init__(self, config_path: str = os.path.join(ROOT, "configs", "body4d.yaml"), use_detector=False):
         """Initialize CONFIG, SAM3_MODEL, and global RUNTIME dict."""
         self.CONFIG = OmegaConf.load(config_path)
+        if use_detector:
+            from models.sam_3d_body.tools.build_detector import HumanDetector
+            human_detector = HumanDetector(name="vitdet", device=device, path="")
+        else:
+            human_detector = None
         self.sam3_model, self.predictor = build_sam3_from_config(self.CONFIG)
-        self.sam3_3d_body_model = build_sam3_3d_body_config(self.CONFIG)
+        self.sam3_3d_body_model = build_sam3_3d_body_config(self.CONFIG, human_detector=human_detector)
 
         if self.CONFIG.completion.get('enable', False):
             self.pipeline_mask, self.pipeline_rgb, self.depth_model, self.max_occ_len, self.generator = build_diffusion_vas_config(self.CONFIG)
         else:
             self.pipeline_mask, self.pipeline_rgb, self.depth_model, self.max_occ_len, self.generator = None, None, None, None, None
-        
+
         self.RUNTIME = {}  # clear any old state
         self.OUTPUT_DIR = os.path.join(self.CONFIG.runtime['output_dir'], gen_id())
         os.makedirs(self.OUTPUT_DIR, exist_ok=True)

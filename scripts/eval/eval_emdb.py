@@ -18,7 +18,7 @@ from eval_utils.emdb.emdb_motion_test import EmdbSmplFullSeqDataset
 from eval_utils.metric_emdb import MetricMocap
 
 from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
-
+from eval_utils.std import suppress_stdout_stderr
 from eval_utils.smooth import smpl_to_smpl_decode_o6dp
 from eval.eval_utils.smooth_utils.geometry import (
     rot6d_to_rotation_matrix,
@@ -134,16 +134,17 @@ if __name__ == "__main__":
     
         mhr_vertices = np.stack(mhr_vertices_list, axis=0)
 
-        conversion_results = converter.convert_mhr2smpl(
-            mhr_vertices=mhr_vertices,
-            single_identity=False,
-            is_tracking=False,
-            return_smpl_meshes=False,
-            return_smpl_parameters=True,
-            return_smpl_vertices=True,
-            return_fitting_errors=False,
-            batch_size=256,
-        )
+        with suppress_stdout_stderr():
+            conversion_results = converter.convert_mhr2smpl(
+                mhr_vertices=mhr_vertices,
+                single_identity=False,
+                is_tracking=False,
+                return_smpl_meshes=False,
+                return_smpl_parameters=True,
+                return_smpl_vertices=True,
+                return_fitting_errors=False,
+                batch_size=256,
+            )
         smpl_params = conversion_results.result_parameters
 
         del smpl_params['left_hand_pose']
@@ -188,16 +189,17 @@ if __name__ == "__main__":
         
             mhr_vertices_flip = np.stack(mhr_vertices_list_flip, axis=0)
 
-            conversion_results = converter.convert_mhr2smpl(
-                mhr_vertices=mhr_vertices_flip,
-                single_identity=False,
-                is_tracking=False,
-                return_smpl_meshes=False,
-                return_smpl_parameters=True,
-                return_smpl_vertices=True,
-                return_fitting_errors=False,
-                batch_size=256,
-            )
+            with suppress_stdout_stderr():
+                conversion_results = converter.convert_mhr2smpl(
+                    mhr_vertices=mhr_vertices_flip,
+                    single_identity=False,
+                    is_tracking=False,
+                    return_smpl_meshes=False,
+                    return_smpl_parameters=True,
+                    return_smpl_vertices=True,
+                    return_fitting_errors=False,
+                    batch_size=256,
+                )
             smpl_params2 = conversion_results.result_parameters
 
             del smpl_params2['left_hand_pose']
@@ -224,110 +226,110 @@ if __name__ == "__main__":
         # smpl_params['body_pose'] = smooth_results['body_pose'].squeeze(0)
         # smpl_params['transl'] = smooth_results['transl'].squeeze(0)
 
-        import math
+        # import math
 
-        # Inputs:
-        # mask: (L,) bool
-        # smpl_params['global_orient']: (L, 3)
-        # smpl_params['body_pose']:     (L, 63)
-        # smpl_params['transl']:        (L, 3)
-        # axis_angle_to_rotation_matrix
-        # smpl_to_smpl_decode_o6dp
+        # # Inputs:
+        # # mask: (L,) bool
+        # # smpl_params['global_orient']: (L, 3)
+        # # smpl_params['body_pose']:     (L, 63)
+        # # smpl_params['transl']:        (L, 3)
+        # # axis_angle_to_rotation_matrix
+        # # smpl_to_smpl_decode_o6dp
 
-        SOFT_THR = 10.0   # degrees
-        HARD_THR = 20.0   # degrees
+        # SOFT_THR = 10.0   # degrees
+        # HARD_THR = 20.0   # degrees
 
-        mask = meta_data["mask"].bool()
-        L = mask.shape[0]
+        # mask = meta_data["mask"].bool()
+        # L = mask.shape[0]
 
-        # work on detached copies
-        go = smpl_params["global_orient"].detach().clone()
-        bp = smpl_params["body_pose"].detach().clone()
-        tr = smpl_params["transl"].detach().clone()
+        # # work on detached copies
+        # go = smpl_params["global_orient"].detach().clone()
+        # bp = smpl_params["body_pose"].detach().clone()
+        # tr = smpl_params["transl"].detach().clone()
 
-        # --------------------------------------------------
-        # 1) split into contiguous True segments
-        # --------------------------------------------------
-        segments = []
-        start = None
-        for i in range(L):
-            if mask[i] and start is None:
-                start = i
-            elif (not mask[i]) and start is not None:
-                segments.append((start, i - 1))
-                start = None
-        if start is not None:
-            segments.append((start, L - 1))
+        # # --------------------------------------------------
+        # # 1) split into contiguous True segments
+        # # --------------------------------------------------
+        # segments = []
+        # start = None
+        # for i in range(L):
+        #     if mask[i] and start is None:
+        #         start = i
+        #     elif (not mask[i]) and start is not None:
+        #         segments.append((start, i - 1))
+        #         start = None
+        # if start is not None:
+        #     segments.append((start, L - 1))
 
-        # --------------------------------------------------
-        # helper: per-frame root rotation change (degrees)
-        # --------------------------------------------------
-        def root_angle_deg(go_seg):
-            """
-            go_seg: (T, 3) axis-angle
-            return: (T-1,) degrees
-            """
-            R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
-            R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
-            trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
-            cos = (trace - 1.0) / 2.0
-            cos = torch.clamp(cos, -1.0, 1.0)
-            return torch.acos(cos) * (180.0 / math.pi)
+        # # --------------------------------------------------
+        # # helper: per-frame root rotation change (degrees)
+        # # --------------------------------------------------
+        # def root_angle_deg(go_seg):
+        #     """
+        #     go_seg: (T, 3) axis-angle
+        #     return: (T-1,) degrees
+        #     """
+        #     R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
+        #     R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
+        #     trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
+        #     cos = (trace - 1.0) / 2.0
+        #     cos = torch.clamp(cos, -1.0, 1.0)
+        #     return torch.acos(cos) * (180.0 / math.pi)
 
-        # --------------------------------------------------
-        # 2) detect spikes in each segment and copy previous
-        # --------------------------------------------------
-        with torch.no_grad():
-            for s, e in segments:
-                T = e - s + 1
-                if T < 3:
-                    continue
+        # # --------------------------------------------------
+        # # 2) detect spikes in each segment and copy previous
+        # # --------------------------------------------------
+        # with torch.no_grad():
+        #     for s, e in segments:
+        #         T = e - s + 1
+        #         if T < 3:
+        #             continue
 
-                ang = root_angle_deg(go[s:e+1])   # (T-1,)
+        #         ang = root_angle_deg(go[s:e+1])   # (T-1,)
 
-                for t in range(1, T - 1):
-                    a_prev = ang[t - 1].item()
-                    a_next = ang[t].item()
+        #         for t in range(1, T - 1):
+        #             a_prev = ang[t - 1].item()
+        #             a_next = ang[t].item()
 
-                    # spike pattern: one large jump, neighbor small
-                    if (a_prev > HARD_THR and a_next < SOFT_THR) or \
-                    (a_next > HARD_THR and a_prev < SOFT_THR):
+        #             # spike pattern: one large jump, neighbor small
+        #             if (a_prev > HARD_THR and a_next < SOFT_THR) or \
+        #             (a_next > HARD_THR and a_prev < SOFT_THR):
 
-                        abs_t = s + t
-                        go[abs_t] = go[abs_t - 1]
-                        bp[abs_t] = bp[abs_t - 1]
-                        tr[abs_t] = tr[abs_t - 1]
+        #                 abs_t = s + t
+        #                 go[abs_t] = go[abs_t - 1]
+        #                 bp[abs_t] = bp[abs_t - 1]
+        #                 tr[abs_t] = tr[abs_t - 1]
 
-        # write back de-spiked sequence
-        smpl_params["global_orient"] = go
-        smpl_params["body_pose"] = bp
-        smpl_params["transl"] = tr
+        # # write back de-spiked sequence
+        # smpl_params["global_orient"] = go
+        # smpl_params["body_pose"] = bp
+        # smpl_params["transl"] = tr
 
-        # --------------------------------------------------
-        # 3) final smoothing (your original 4 lines)
-        # --------------------------------------------------
-        with torch.no_grad():
-            for s, e in segments:
-                T = e - s + 1
-                if T < 2:
-                    continue
+        # # --------------------------------------------------
+        # # 3) final smoothing (your original 4 lines)
+        # # --------------------------------------------------
+        # with torch.no_grad():
+        #     for s, e in segments:
+        #         T = e - s + 1
+        #         if T < 2:
+        #             continue
 
-                # smpl_to_smpl_decode_o6dp internally uses savgol(window_length=11),
-                # so only enable smoothing when the segment is long enough.
-                use_smooth = (T >= 11)
-                if not use_smooth:
-                    continue
+        #         # smpl_to_smpl_decode_o6dp internally uses savgol(window_length=11),
+        #         # so only enable smoothing when the segment is long enough.
+        #         use_smooth = (T >= 11)
+        #         if not use_smooth:
+        #             continue
 
-                smooth_results = smpl_to_smpl_decode_o6dp(
-                    smpl_params["global_orient"][s:e+1].unsqueeze(0),
-                    smpl_params["body_pose"][s:e+1].unsqueeze(0),
-                    smpl_params["transl"][s:e+1].unsqueeze(0),
-                    should_apply_smooothing=use_smooth,
-                )
+        #         smooth_results = smpl_to_smpl_decode_o6dp(
+        #             smpl_params["global_orient"][s:e+1].unsqueeze(0),
+        #             smpl_params["body_pose"][s:e+1].unsqueeze(0),
+        #             smpl_params["transl"][s:e+1].unsqueeze(0),
+        #             should_apply_smooothing=use_smooth,
+        #         )
 
-                smpl_params["global_orient"][s:e+1] = smooth_results["global_orient"].squeeze(0)
-                smpl_params["body_pose"][s:e+1] = smooth_results["body_pose"].squeeze(0)
-                smpl_params["transl"][s:e+1] = smooth_results["transl"].squeeze(0)
+        #         smpl_params["global_orient"][s:e+1] = smooth_results["global_orient"].squeeze(0)
+        #         smpl_params["body_pose"][s:e+1] = smooth_results["body_pose"].squeeze(0)
+        #         smpl_params["transl"][s:e+1] = smooth_results["transl"].squeeze(0)
 
 
-        metric_emdb.evaluate(smpl_params, meta_data, args.body_model_path, None, None)
+        metric_emdb.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)

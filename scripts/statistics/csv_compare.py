@@ -1,33 +1,71 @@
 import csv
 import math
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 
 
-def compare_two_score_csvs(csv1_path: str, csv2_path: str, out_path: str = "compare.jpg"):
+def compare_two_score_csvs_by_metric(
+    csv1_path: str,
+    csv2_path: str,
+    out_dir: str = "compare_by_metric",
+    fig_w: int = 16,
+    row_h: float = 2.2,
+    mark_max_gain: bool = False,
+):
     """
     Two CSVs, no header. Each row:
       col0 = seq name (string)
-      col1.. = per-frame scores (float)
+      col1 = metric name (string)
+      col2 = metric mean (float)     # optional/NaN tolerated
+      col3.. = per-frame scores (float)
 
-    For each row (matched by seq name), plot:
+    Each seq appears in 4 rows (4 different metrics). (Not strictly enforced; we group by metric anyway.)
+
+    We generate big figures (one per metric), each stacking all seqs vertically:
       csv1 = red line
       csv2 = blue line
-    Mark indices where the two curves "cross" (intersection) on the x-axis (frame index).
-    Stack all rows vertically into one big figure and save to out_path.
+
+    If mark_max_gain=True:
+      For each subplot (seq), mark the index where (b - a) is maximized among finite pairs.
+
+    Output filename: <metric_name>.jpg under out_dir.
     """
 
+    def _to_float(x: str) -> float:
+        x = (x or "").strip()
+        if x == "":
+            return float("nan")
+        try:
+            return float(x)
+        except ValueError:
+            return float("nan")
+
+    def _finite(x: float) -> bool:
+        return isinstance(x, (int, float)) and not math.isnan(x) and math.isfinite(x)
+
     def _read_csv(p: str):
-        rows = []
+        """
+        return dict:
+          data[metric_name][seq_name] = {"mean": float, "vals": [float, ...]}
+        """
+        data = {}
         with open(p, "r", newline="") as f:
             reader = csv.reader(f)
             for r in reader:
                 if not r:
                     continue
-                name = r[0]
+                if len(r) < 4:
+                    # must have at least seq, metric, mean, one score (or empty score)
+                    continue
+
+                seq = (r[0] or "").strip()
+                metric = (r[1] or "").strip()
+                mean_v = _to_float(r[2])
+
                 vals = []
-                for x in r[1:]:
+                for x in r[3:]:
                     x = (x or "").strip()
                     if x == "":
                         vals.append(float("nan"))
@@ -36,88 +74,124 @@ def compare_two_score_csvs(csv1_path: str, csv2_path: str, out_path: str = "comp
                             vals.append(float(x))
                         except ValueError:
                             vals.append(float("nan"))
-                rows.append((name, vals))
-        return rows
 
-    def _cross_indices(a, b):
-        """
-        Return indices i (0-based) where a and b cross between i and i+1,
-        i.e., sign(a-b) changes. Also handle exact hits (diff == 0).
-        """
-        n = min(len(a), len(b))
-        idxs = set()
+                if metric not in data:
+                    data[metric] = {}
+                data[metric][seq] = {"mean": mean_v, "vals": vals}
+        return data
 
-        def finite(x):
-            return x is not None and isinstance(x, (int, float)) and not math.isnan(x) and math.isfinite(x)
+    def _sanitize_filename(name: str) -> str:
+        name = name.strip()
+        name = re.sub(r"[\\/:*?\"<>|]+", "_", name)  # windows-illegal chars
+        name = re.sub(r"\s+", " ", name).strip()
+        return name or "metric"
 
-        for i in range(n):
-            if finite(a[i]) and finite(b[i]) and (a[i] - b[i]) == 0.0:
-                idxs.add(i)
+    d1 = _read_csv(csv1_path)
+    d2 = _read_csv(csv2_path)
 
-        for i in range(n - 1):
-            if not (finite(a[i]) and finite(b[i]) and finite(a[i + 1]) and finite(b[i + 1])):
-                continue
-            d0 = a[i] - b[i]
-            d1 = a[i + 1] - b[i + 1]
-            # strict sign change
-            if d0 == 0.0 or d1 == 0.0:
-                continue
-            if (d0 > 0 and d1 < 0) or (d0 < 0 and d1 > 0):
-                idxs.add(i + 1)  # mark the later index for visibility
-        return sorted(idxs)
+    out_dir_p = Path(out_dir)
+    out_dir_p.mkdir(parents=True, exist_ok=True)
 
-    rows1 = _read_csv(csv1_path)
-    rows2 = _read_csv(csv2_path)
+    # metrics to generate = intersection (safer for comparison)
+    metrics = sorted(set(d1.keys()) & set(d2.keys()))
+    if not metrics:
+        raise ValueError("No overlapping metric names found between the two CSVs.")
 
-    m2 = {name: vals for name, vals in rows2}
-    names = [name for name, _ in rows1 if name in m2]
+    base1 = Path(csv1_path).name
+    base2 = Path(csv2_path).name
 
-    if not names:
-        raise ValueError("No overlapping seq names found between the two CSVs.")
+    for metric in metrics:
+        s1 = d1.get(metric, {})
+        s2 = d2.get(metric, {})
 
-    nrows = len(names)
-    # big vertical stack; tune height per row
-    fig_h = max(2.2 * nrows, 3.0)
-    fig_w = 16
-    fig, axes = plt.subplots(nrows=nrows, ncols=1, figsize=(fig_w, fig_h), sharex=False)
-    if nrows == 1:
-        axes = [axes]
+        # seq intersection for this metric
+        seqs = [k for k in s1.keys() if k in s2]
+        if not seqs:
+            continue
+        seqs = sorted(seqs)
 
-    for ax, name in zip(axes, names):
-        a = dict(rows1).get(name)
-        b = m2.get(name)
-        n = min(len(a), len(b))
-        a = a[:n]
-        b = b[:n]
+        nrows = len(seqs)
+        fig_h = max(row_h * nrows, 3.0)
+        fig, axes = plt.subplots(nrows=nrows, ncols=1, figsize=(fig_w, fig_h), sharex=False)
+        if nrows == 1:
+            axes = [axes]
 
-        x = list(range(n))
-        ax.plot(x, a, color="red", linewidth=1.5, label=Path(csv1_path).name)
-        ax.plot(x, b, color="blue", linewidth=1.5, label=Path(csv2_path).name)
+        for ax, seq in zip(axes, seqs):
+            a = s1[seq]["vals"]
+            b = s2[seq]["vals"]
+            n = min(len(a), len(b))
+            a = a[:n]
+            b = b[:n]
+            x = list(range(n))
 
-        crosses = _cross_indices(a, b)
-        # mark crossings on the plot (use mid y for a simple marker line)
-        if crosses:
-            for ci in crosses:
-                ax.axvline(ci, linestyle="--", linewidth=1.0, alpha=0.6)
-            # also annotate once with indices (avoid clutter)
-            ax.text(
-                0.01, 0.92,
-                f"cross idx: {crosses[:30]}{' ...' if len(crosses) > 30 else ''}",
-                transform=ax.transAxes,
-                fontsize=9,
-                verticalalignment="top",
-            )
+            ax.plot(x, a, color="red", linewidth=1.5, label=base1)
+            ax.plot(x, b, color="blue", linewidth=1.5, label=base2)
 
-        ax.set_title(name, fontsize=11)
-        ax.grid(True, alpha=0.25)
+            # mark index where (b - a) is maximized
+            if mark_max_gain:
+                best_idx = None
+                best_val = -float("inf")
+                for i, (ai, bi) in enumerate(zip(a, b)):
+                    if _finite(ai) and _finite(bi):
+                        d = bi - ai
+                        if d > best_val:
+                            best_val = d
+                            best_idx = i
 
-    # legend only once (top subplot)
-    axes[0].legend(loc="upper right", fontsize=9)
+                if best_idx is not None:
+                    ax.axvline(
+                        best_idx,
+                        linestyle=":",
+                        linewidth=1.2,
+                        color="black",
+                        alpha=0.6,
+                    )
+                    ax.text(
+                        0.99,
+                        0.92,
+                        f"max(b-a)={best_val:.4f} @ {best_idx}",
+                        transform=ax.transAxes,
+                        fontsize=9,
+                        horizontalalignment="right",
+                        verticalalignment="top",
+                    )
 
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+            # show means if available
+            m1 = s1[seq].get("mean", float("nan"))
+            m2 = s2[seq].get("mean", float("nan"))
+            mean_txt = []
+            if _finite(m1):
+                mean_txt.append(f"{base1} mean={m1:.4f}")
+            if _finite(m2):
+                mean_txt.append(f"{base2} mean={m2:.4f}")
+            if mean_txt:
+                ax.text(
+                    0.01,
+                    0.92,
+                    " | ".join(mean_txt),
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    verticalalignment="top",
+                )
+
+            ax.set_title(seq, fontsize=11)
+            ax.grid(True, alpha=0.25)
+
+        axes[0].legend(loc="upper right", fontsize=9)
+        fig.suptitle(metric, fontsize=14, y=1.002)
+        fig.tight_layout()
+
+        out_path = out_dir_p / f"{_sanitize_filename(metric)}.jpg"
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"Done. Figures saved to: {out_dir_p.resolve()}")
 
 
 # Example:
-
+compare_two_score_csvs_by_metric(
+    "/home/hmq/projects/sam-body4d/csv_results/3DPW-box-kp.csv", 
+    "/home/hmq/projects/sam-body4d/csv_results/3DPW-mask-kp.csv", 
+    out_dir="/home/hmq/projects/sam-body4d/figs",
+    mark_max_gain=True
+)

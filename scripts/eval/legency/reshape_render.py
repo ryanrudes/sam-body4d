@@ -11,15 +11,15 @@ from typing import Dict
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
 sys.path.append(os.path.join(os.path.dirname(current_dir), 'mhr_smpl_conversion'))
-sys.path.append(os.path.join(current_dir, 'eval_utils'))
+sys.path.append(os.path.join(os.path.dirname(current_dir), 'eval_utils'))
 
-from eval.eval_utils.dataset_3dpw import ThreedpwSmplFullSeqDataset
+from dataset_3dpw import ThreedpwSmplFullSeqDataset
 
-result_root = "/home/data/hmq/results/hmr/3DPW-box-kp-real05"
+result_root = "/home/data/hmq/results/hmr/3DPW-mask-kp"
 # os.makedirs(save_root, exist_ok=True)
 
 # init dataset and metric evaluator
-dataset_3dpw = ThreedpwSmplFullSeqDataset()
+dataset_3dpw = ThreedpwSmplFullSeqDataset(label_path="/home/data/hmq/datasets/hmr/3DPW/hmr4d_support")
 
 
 for i in tqdm(range(len(dataset_3dpw)), desc="Processing 3DPW"):
