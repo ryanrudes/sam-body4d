@@ -28,6 +28,7 @@ from ..modules.camera_embed import CameraEncoder
 from ..modules.transformer import FFN, MLP
 
 from .base_model import BaseModel
+from .post_process import postprocess_human_params
 
 from utils import kalman_smooth_mhr_params_per_obj_id_adaptive, smooth_scale_shape_local, ema_smooth_global_rot_per_obj_id_adaptive
 
@@ -2242,6 +2243,17 @@ class SAM3DBody(BaseModel):
 			#     vis_flags=occ_dict,
 			#     key_name="global_rot",
 			# )
+
+			# params = {
+			# 	"global_rot": pose_output["mhr"]["global_rot"],
+			# 	"pred_cam_t": pose_output["mhr"]['pred_cam_t'],
+			# 	"repr": pose_output["mhr"]["body_pose"],
+			# 	"mask": torch.ones(pose_output["mhr"]["global_rot"].shape[0], dtype=torch.bool),
+			# }
+			# out = postprocess_human_params(params, batch_size=batch_size)
+			# pose_output["mhr"]["global_rot"] = out["global_rot"]
+			# pose_output["mhr"]['pred_cam_t'] = out['pred_cam_t']
+			# pose_output["mhr"]["body_pose"] = out["repr"]
 
 			verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
 				self.head_pose.mhr_forward(
