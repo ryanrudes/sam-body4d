@@ -64,7 +64,7 @@ CONFIG = None           # loaded config
 sam3_model = None       # your SAM-3 model instance
 sam3_image_model = None
 image_predictor = None
-predictor = None        # sam-3 predictor
+video_predictor = None        # sam-3 predictor
 inference_state = None  # sam-3 inference_state
 RUNTIME = {}            # global dict to store runtime data per video/run
 
@@ -77,10 +77,11 @@ def build_sam3_from_config(cfg):
     from models.sam3.sam3.model_builder import build_sam3_video_model
 
     sam3_model = build_sam3_video_model(checkpoint_path=cfg.sam3['ckpt_path'])
-    predictor = sam3_model.tracker
-    predictor.backbone = sam3_model.detector.backbone
+    image_predictor = sam3_model.detector
+    video_predictor = sam3_model.tracker
+    video_predictor.backbone = sam3_model.detector.backbone
 
-    return sam3_model, predictor
+    return sam3_model, image_predictor, video_predictor
 
 
 def build_sam3_3d_body_config(cfg):
@@ -124,10 +125,10 @@ def build_diffusion_vas_config(cfg):
 
 def init_runtime(config_path: str = os.path.join(ROOT, "configs", "body4d.yaml")):
     """Initialize CONFIG, SAM3_MODEL, and global RUNTIME dict."""
-    global CONFIG, sam3_model, predictor, inference_state, sam3_3d_body_model, RUNTIME, OUTPUT_DIR, pipeline_mask \
+    global CONFIG, sam3_model, video_predictor, image_predictor, inference_state, sam3_3d_body_model, RUNTIME, OUTPUT_DIR, pipeline_mask \
         , pipeline_rgb, depth_model, max_occ_len, generator
     CONFIG = OmegaConf.load(config_path)
-    sam3_model, predictor = build_sam3_from_config(CONFIG)
+    sam3_model, image_predictor, video_predictor = build_sam3_from_config(CONFIG)
     sam3_3d_body_model = build_sam3_3d_body_config(CONFIG)
 
     if CONFIG.completion.get('enable', False):
@@ -236,8 +237,8 @@ def prepare_video(path: str):
     total_text = f"{int(dur // 60):02d}:{int(dur % 60):02d}"
     time_text = f"00:00 / {total_text}"
 
-    inference_state = predictor.init_state(video_path=path)
-    predictor.clear_all_points_in_video(inference_state)
+    inference_state = video_predictor.init_state(video_path=path)
+    video_predictor.clear_all_points_in_video(inference_state)
     RUNTIME['inference_state'] = inference_state
     RUNTIME['clicks'] = {}
     RUNTIME['id'] = 1
@@ -422,7 +423,7 @@ def on_click(evt: gr.SelectData, point_type: str, video_path: str, frame_idx: in
     points_tensor = torch.tensor(rel_points, dtype=torch.float32)
     points_labels_tensor = torch.tensor(input_label, dtype=torch.int32)
 
-    _, RUNTIME['out_obj_ids'], low_res_masks, video_res_masks = predictor.add_new_points_or_box(
+    _, RUNTIME['out_obj_ids'], low_res_masks, video_res_masks = video_predictor.add_new_points_or_box(
         inference_state=RUNTIME['inference_state'],
         frame_idx=frame_idx,
         obj_id=RUNTIME['id'],
@@ -484,7 +485,7 @@ def on_mask_generation(video_path: str):
 
     # run propagation throughout the video and collect the results in a dict
     video_segments = {}  # video_segments contains the per-frame segmentation results
-    for frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores, iou_scores in predictor.propagate_in_video(
+    for frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores, iou_scores in video_predictor.propagate_in_video(
         RUNTIME['inference_state'],
         start_frame_idx=0,
         max_frame_num_to_track=1800,
@@ -981,7 +982,7 @@ def on_4d_generation(video_path: str):
                 occ_dict[obj_id] = [1] * len(batch_masks)
 
         # Process with external mask
-        mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, iou_dict=iou_dict, predictor=predictor)
+        mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, iou_dict=iou_dict, predictor=video_predictor)
 
         num_empth_ids = 0
         for frame_id in range(len(batch_images)):

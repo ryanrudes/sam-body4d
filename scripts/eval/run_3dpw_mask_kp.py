@@ -20,7 +20,7 @@ def inference(args):
     bboxes = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_bbx_xyxy_uint16.pt'))
     kp = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_vid2kp2d.pt'))
 
-    batch_size = 1000
+    batch_size = 1024
 
     # inference
     for seq in tqdm(test_seq_name_list):
