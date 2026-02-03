@@ -130,13 +130,11 @@ def build_sam3_from_config(cfg):
     Construct and return your SAM-3 model from config.
     You replace this with your real init code.
     """
-    from models.sam3.sam3.model_builder import build_sam3_video_model
-
-    sam3_model = build_sam3_video_model(checkpoint_path=cfg.sam3['ckpt_path'])
-    predictor = sam3_model.tracker
-    predictor.backbone = sam3_model.detector.backbone
-
-    return sam3_model, predictor
+    from models.sam3.sam3.model_builder import build_sam3_video_predictor
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bpe_path = f"{script_dir}/models/sam3/assets/bpe_simple_vocab_16e6.txt.gz"
+    predictor = build_sam3_video_predictor(bpe_path=bpe_path, checkpoint_path=cfg.sam3['ckpt_path'])
+    return predictor
 
 
 def read_frame_at(path: str, idx: int):
@@ -160,11 +158,11 @@ def build_sam3_3d_body_config(cfg,human_detector=None):
         cfg.sam_3d_body['ckpt_path'], device=device, mhr_path=mhr_path
     )
     
-    human_segmentor, fov_estimator = None, None
+    human_detector, human_segmentor, fov_estimator = None, None, None
     from models.sam_3d_body.tools.build_fov_estimator import FOVEstimator
     fov_estimator = FOVEstimator(name='moge2', device=device, path=fov_path)
-    from models.sam_3d_body.tools.build_detector import HumanDetector
-    human_detector = HumanDetector(name="vitdet", device=device, path=detector_path)
+    # from models.sam_3d_body.tools.build_detector import HumanDetector
+    # human_detector = HumanDetector(name="vitdet", device=device, path=detector_path)
 
     estimator = SAM3DBodyEstimator(
         sam_3d_body_model=model,
@@ -380,6 +378,18 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     
     return iou_dict_obj_id, occ_dict_obj_id, final_pred_amodal_masks_com
 
+def propagate_in_video(predictor, session_id):
+    # we will just propagate from frame 0 to the end of the video
+    outputs_per_frame = {}
+    for response in predictor.handle_stream_request(
+        request=dict(
+            type="propagate_in_video",
+            session_id=session_id,
+        )
+    ):
+        outputs_per_frame[response["frame_index"]] = response["outputs"]
+    return outputs_per_frame
+
 class OfflineApp:
     def __init__(self, config_path: str = os.path.join(ROOT, "configs", "body4d.yaml"), use_detector=False):
         """Initialize CONFIG, SAM3_MODEL, and global RUNTIME dict."""
@@ -389,7 +399,7 @@ class OfflineApp:
             human_detector = HumanDetector(name="vitdet", device=device, path="")
         else:
             human_detector = None
-        self.sam3_model, self.predictor = build_sam3_from_config(self.CONFIG)
+        self.predictor = build_sam3_from_config(self.CONFIG)
         self.sam3_3d_body_model = build_sam3_3d_body_config(self.CONFIG, human_detector=human_detector)
 
         if self.CONFIG.completion.get('enable', False):
@@ -405,6 +415,7 @@ class OfflineApp:
         self.RUNTIME['completion_resolution'] = self.CONFIG.completion.get('completion_resolution', [512, 1024])
         self.RUNTIME['smpl_export'] = self.CONFIG.runtime.get('smpl_export', False)
         self.RUNTIME['bboxes'] = None
+        self.RUNTIME['session_id'] = None
 
     def on_mask_generation(self, video_path: str=None, start_frame_idx: int = 0, max_frame_num_to_track: int = 1800):
         """
@@ -415,6 +426,7 @@ class OfflineApp:
 
         # run propagation throughout the video and collect the results in a dict
         video_segments = {}  # video_segments contains the per-frame segmentation results
+        outputs_per_frame = propagate_in_video(self.predictor.predictor, self.predictor.session_id)
         for frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores, iou_scores in self.predictor.propagate_in_video(
             self.RUNTIME['inference_state'],
             start_frame_idx=0,

@@ -1272,6 +1272,13 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
         propagation_type = (
             "propagation_partial" if obj_ids is not None else "propagation_fetch"
         )
+
+        if len(action_history)>0 and action_history[-1]['type'] == 'remove':
+            # if last action is remove, we run full propagation to avoid any potential inconsistency
+            propagation_type = "propagation_partial"
+            obj_ids = list(inference_state['cached_frame_outputs'][0].keys())
+            obj_ids = [obj_id.item() for obj_id in obj_ids]
+
         return propagation_type, obj_ids
 
     def remove_object(self, inference_state, obj_id, is_user_action=False):

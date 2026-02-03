@@ -1124,7 +1124,11 @@ class Sam3VideoBase(nn.Module):
                 tqdm_disable=True,
                 run_mem_encoder=run_mem_encoder,
             ):
-                out_frame_idx, out_obj_ids, out_low_res_masks, _, out_obj_scores = out
+                try:
+                    # text mode
+                    out_frame_idx, out_obj_ids, out_low_res_masks, _, _, out_obj_scores = out
+                except:
+                    out_frame_idx, out_obj_ids, out_low_res_masks, _, out_obj_scores = out
                 num_frames_propagated += 1
 
             # only 1 frames should be propagated

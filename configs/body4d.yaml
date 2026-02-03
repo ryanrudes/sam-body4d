@@ -20,7 +20,7 @@ sam_3d_body:
   mhr_path: ${paths.ckpt_root}/sam-3d-body-dinov3/assets/mhr_model.pt
   # download (fov_path): https://huggingface.co/Ruicheng/moge-2-vitl-normal
   fov_path: ${paths.ckpt_root}/moge-2-vitl-normal/model.pt
-  batch_size: 128
+  batch_size: 32
   detector_path: ""
   segmentor_path: ""
 
