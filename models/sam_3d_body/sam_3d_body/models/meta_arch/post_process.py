@@ -1,32 +1,25 @@
-# smooth_human_lb.py
+# smooth_human_lb_ultra.py
 # Single-file, self-contained.
 #
-# Goal:
-#   Same workflow as your SMPL version, but your tensors are flattened as (L*B, ...),
-#   where the flatten order is timestep-major:
-#       idx = t * B + b
-#   i.e. reshape to (L, B, ...) is valid.
+# ULTRA / OVERKILL STRONG SMOOTHING VERSION
+# - For “super aggressive” smoothing of large jitter.
+# - You can dial back later.
+#
+# Key changes vs normal:
+#   1) Much more aggressive despike:
+#        - original "jump-return" pattern
+#        - + absolute jump threshold (any big inter-frame jump -> copy prev)
+#   2) Rotations:
+#        - big sigma + multiple passes
+#        - optional extra "local slerp" relaxation pass
+#   3) Translation / repr:
+#        - heavy Gaussian conv (large sigma, multiple passes)
+#        - optional EMA blend to further crush jitter
 #
 # Public API:
 #   postprocess_human_params(params: dict, batch_size: int) -> dict
 #
-# Expected params keys (all flattened as (L*B, ...)):
-#   - "global_rot":  (L*B, 3) axis-angle
-#   - "pred_cam_t":  (L*B, 3) translation
-# Optional:
-#   - "repr":        (L*B, D) any other human representation to copy/smooth like body_pose
-#   - "mask":        (L*B,) bool, True=valid. If absent, treat all True.
-#
-# Behavior (per batch element b, per contiguous True segment):
-#   1) despike using root rotation jump pattern (same as your SMPL code)
-#   2) if segment length >= 11:
-#        - smooth global_rot in rotation space (quat-window mean)
-#        - smooth pred_cam_t with savgol
-#        - if "repr" exists: smooth repr with savgol (Euclidean) + copy on spikes
-#
-# Notes:
-#   - global_rot smoothing is rotation-aware; repr smoothing is Euclidean (safe default for unknown D).
-#   - To match your SMPL logic: spike fix copies BOTH global_rot and pred_cam_t (and repr if present).
+# Flatten order must be t-major: idx = t*B + b
 
 import math
 import torch
@@ -38,10 +31,6 @@ import torch.nn.functional as F
 # ============================================================
 
 def axis_angle_to_rotation_matrix(aa: torch.Tensor) -> torch.Tensor:
-    """
-    aa: (..., 3) axis-angle
-    return: (..., 3, 3)
-    """
     eps = 1e-8
     theta = torch.linalg.norm(aa, dim=-1, keepdim=True).clamp_min(eps)
     axis = aa / theta
@@ -64,10 +53,6 @@ def axis_angle_to_rotation_matrix(aa: torch.Tensor) -> torch.Tensor:
 
 
 def rotation_matrix_to_axis_angle(R: torch.Tensor) -> torch.Tensor:
-    """
-    R: (..., 3, 3)
-    return: (..., 3) axis-angle
-    """
     eps = 1e-8
     trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
     cos = (trace - 1.0) / 2.0
@@ -91,13 +76,10 @@ def rotation_matrix_to_axis_angle(R: torch.Tensor) -> torch.Tensor:
 
 
 # ============================================================
-# Rotmat <-> quaternion (w,x,y,z) + window mean
+# Rotmat <-> quaternion (w,x,y,z) + Markley mean
 # ============================================================
 
 def _rotmat_to_quat(R: torch.Tensor) -> torch.Tensor:
-    """
-    R: (...,3,3) -> (...,4) (w,x,y,z), normalized, canonicalized w>=0
-    """
     m00, m11, m22 = R[..., 0, 0], R[..., 1, 1], R[..., 2, 2]
     trace = m00 + m11 + m22
 
@@ -144,9 +126,6 @@ def _rotmat_to_quat(R: torch.Tensor) -> torch.Tensor:
 
 
 def _quat_to_rotmat(q: torch.Tensor) -> torch.Tensor:
-    """
-    q: (...,4) (w,x,y,z) -> (...,3,3)
-    """
     q = F.normalize(q, dim=-1)
     w, x, y, z = q.unbind(dim=-1)
 
@@ -172,9 +151,6 @@ def _gaussian_weights(radius: int, sigma: float, device, dtype):
 
 
 def _quat_weighted_mean_markley(q: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    """
-    q: (K,4) quats, w: (K,) weights
-    """
     q0 = q[0]
     sign = torch.sign((q * q0).sum(dim=-1, keepdim=True))
     sign = torch.where(sign >= 0, torch.ones_like(sign), -torch.ones_like(sign))
@@ -190,81 +166,167 @@ def _quat_weighted_mean_markley(q: torch.Tensor, w: torch.Tensor) -> torch.Tenso
 
 
 @torch.no_grad()
-def smooth_axis_angle_quat_mean(aa: torch.Tensor, sigma: float = 1.0) -> torch.Tensor:
+def smooth_axis_angle_quat_mean_ultra(aa: torch.Tensor, sigma: float = 5.0, passes: int = 4) -> torch.Tensor:
     """
-    aa: (T,3) axis-angle
-    return: (T,3) smoothed in rotation space
+    aa: (T,3)
+    ULTRA: sigma=5.0, passes=4  (yes, it will smear motion)
     """
     T = aa.shape[0]
     if T <= 1:
         return aa
 
-    device, dtype = aa.device, aa.dtype
-    radius = max(1, int(math.ceil(3.0 * sigma)))
-    w = _gaussian_weights(radius, sigma, device=device, dtype=dtype)
-    K = 2 * radius + 1
+    out = aa
+    for _ in range(max(1, int(passes))):
+        device, dtype = out.device, out.dtype
+        radius = max(1, int(math.ceil(3.0 * sigma)))
+        w = _gaussian_weights(radius, sigma, device=device, dtype=dtype)
+        K = 2 * radius + 1
 
-    R = axis_angle_to_rotation_matrix(aa)            # (T,3,3)
-    q = _rotmat_to_quat(R)                           # (T,4)
-    q_pad = torch.cat([q[:1].expand(radius, 4), q, q[-1:].expand(radius, 4)], dim=0)  # (T+2r,4)
+        R = axis_angle_to_rotation_matrix(out)
+        q = _rotmat_to_quat(R)
+        q_pad = torch.cat([q[:1].expand(radius, 4), q, q[-1:].expand(radius, 4)], dim=0)
 
-    q_out = torch.empty_like(q)
-    for t in range(T):
-        q_win = q_pad[t:t + K]  # (K,4)
-        q_out[t] = _quat_weighted_mean_markley(q_win, w)
+        q_out = torch.empty_like(q)
+        for t in range(T):
+            q_win = q_pad[t:t + K]
+            q_out[t] = _quat_weighted_mean_markley(q_win, w)
 
-    R_out = _quat_to_rotmat(q_out)                   # (T,3,3)
-    return rotation_matrix_to_axis_angle(R_out)      # (T,3)
+        out = rotation_matrix_to_axis_angle(_quat_to_rotmat(q_out))
+    return out
 
 
 # ============================================================
-# Savitzky–Golay smoothing (no scipy)
+# Optional extra relaxation: local slerp to neighbors (ULTRA)
 # ============================================================
 
-def _savgol_coeffs(window_length: int, polyorder: int, device, dtype) -> torch.Tensor:
-    if window_length % 2 != 1 or window_length < 3:
-        raise ValueError("window_length must be odd and >=3")
-    if polyorder >= window_length:
-        raise ValueError("polyorder must be < window_length")
-    m = window_length // 2
-    x = torch.arange(-m, m + 1, device=device, dtype=dtype)
-    A = torch.stack([x ** p for p in range(polyorder + 1)], dim=-1)  # (W,P+1)
-    pinv = torch.linalg.pinv(A)  # (P+1,W)
-    return pinv[0]  # (W,)
+def _slerp(q0: torch.Tensor, q1: torch.Tensor, t: float) -> torch.Tensor:
+    """
+    q0,q1: (...,4) unit quats (wxyz)
+    """
+    q0 = F.normalize(q0, dim=-1)
+    q1 = F.normalize(q1, dim=-1)
+    dot = (q0 * q1).sum(dim=-1, keepdim=True)
+    q1 = torch.where(dot < 0, -q1, q1)
+    dot = dot.abs().clamp(-1.0, 1.0)
+
+    # if very close, lerp
+    close = dot > 0.9995
+    q = q0 + t * (q1 - q0)
+    q = F.normalize(q, dim=-1)
+
+    theta0 = torch.acos(dot)
+    sin0 = torch.sin(theta0).clamp_min(1e-8)
+    theta = theta0 * t
+    s0 = torch.sin(theta0 - theta) / sin0
+    s1 = torch.sin(theta) / sin0
+    qs = s0 * q0 + s1 * q1
+    qs = F.normalize(qs, dim=-1)
+
+    return torch.where(close, q, qs)
 
 
 @torch.no_grad()
-def smooth_with_savgol(x: torch.Tensor, window_length: int = 11, polyorder: int = 5) -> torch.Tensor:
+def relax_quat_local(q: torch.Tensor, alpha: float = 0.65, passes: int = 3) -> torch.Tensor:
     """
-    x: (T,C) or (T,3) etc. Smooth along T.
+    q: (T,4) wxyz
+    Each pass: pull each frame toward mean of neighbors via slerp.
+    alpha: how strong the pull is (0..1)
     """
-    if x.ndim != 2:
-        raise ValueError(f"smooth_with_savgol expects (T,C), got {tuple(x.shape)}")
-    T, C = x.shape
-    if T < window_length:
-        return x
+    T = q.shape[0]
+    if T <= 2:
+        return q
 
-    device, dtype = x.device, x.dtype
-    c = _savgol_coeffs(window_length, polyorder, device=device, dtype=dtype)  # (W,)
-    m = window_length // 2
+    out = q
+    for _ in range(max(1, int(passes))):
+        prev = out[:-2]
+        mid = out[1:-1]
+        nxt = out[2:]
+        # neighbor "mean" approx by slerp(prev,nxt,0.5)
+        nn = _slerp(prev, nxt, 0.5)
+        mid2 = _slerp(mid, nn, float(alpha))
+        out = torch.cat([out[:1], mid2, out[-1:]], dim=0)
+    return out
 
-    x_pad = torch.cat([x[:1].expand(m, C), x, x[-1:].expand(m, C)], dim=0)  # (T+2m,C)
-    xp = x_pad.t().unsqueeze(0)  # (1,C,T+2m)
 
-    weight = c.view(1, 1, -1).expand(C, 1, -1)  # (C,1,W)
-    y = F.conv1d(xp, weight, padding=0, groups=C)  # (1,C,T)
-    return y.squeeze(0).t()  # (T,C)
+@torch.no_grad()
+def smooth_axis_angle_ultra_overkill(aa: torch.Tensor) -> torch.Tensor:
+    """
+    aa: (T,3) -> (T,3)
+    Overkill pipeline: Markley mean (huge) + local relax
+    """
+    if aa.shape[0] <= 1:
+        return aa
+    R = axis_angle_to_rotation_matrix(aa)
+    q = _rotmat_to_quat(R)
+    # ultra mean
+    aa1 = smooth_axis_angle_quat_mean_ultra(aa, sigma=5.0, passes=4)
+    R1 = axis_angle_to_rotation_matrix(aa1)
+    q1 = _rotmat_to_quat(R1)
+    # extra relax
+    q2 = relax_quat_local(q1, alpha=0.65, passes=3)
+    return rotation_matrix_to_axis_angle(_quat_to_rotmat(q2))
 
 
 # ============================================================
-# Your original spike metric (degrees) + segment split
+# Strong Gaussian conv smoothing (Euclidean) + EMA crush
+# ============================================================
+
+@torch.no_grad()
+def smooth_with_gaussian_conv_ultra(x: torch.Tensor, sigma: float = 6.0, passes: int = 4) -> torch.Tensor:
+    """
+    x: (T,C) smooth along T by 1D Gaussian conv (replicate padding)
+    ULTRA: sigma=6.0, passes=4
+    """
+    if x.ndim != 2:
+        raise ValueError(f"smooth_with_gaussian_conv_ultra expects (T,C), got {tuple(x.shape)}")
+    T, C = x.shape
+    if T <= 1:
+        return x
+
+    out = x
+    for _ in range(max(1, int(passes))):
+        device, dtype = out.device, out.dtype
+        radius = max(1, int(math.ceil(3.0 * sigma)))
+        w = _gaussian_weights(radius, sigma, device=device, dtype=dtype)
+        m = radius
+
+        out_pad = torch.cat([out[:1].expand(m, C), out, out[-1:].expand(m, C)], dim=0)
+        xp = out_pad.t().unsqueeze(0)  # (1,C,T+2m)
+
+        weight = w.view(1, 1, -1).expand(C, 1, -1)
+        y = F.conv1d(xp, weight, padding=0, groups=C)  # (1,C,T)
+        out = y.squeeze(0).t()
+    return out
+
+
+@torch.no_grad()
+def smooth_with_ema_ultra(x: torch.Tensor, alpha: float = 0.90, passes: int = 2) -> torch.Tensor:
+    """
+    x: (T,C)
+    EMA: y[t] = alpha*y[t-1] + (1-alpha)*x[t]
+    ULTRA: alpha=0.90, passes=2
+    """
+    if x.ndim != 2:
+        raise ValueError(f"smooth_with_ema_ultra expects (T,C), got {tuple(x.shape)}")
+    T, C = x.shape
+    if T <= 1:
+        return x
+
+    out = x
+    for _ in range(max(1, int(passes))):
+        y = torch.empty_like(out)
+        y[0] = out[0]
+        for t in range(1, T):
+            y[t] = alpha * y[t - 1] + (1.0 - alpha) * out[t]
+        out = y
+    return out
+
+
+# ============================================================
+# Spike metric + segment split
 # ============================================================
 
 def _split_true_segments(mask_1d: torch.Tensor):
-    """
-    mask_1d: (L,) bool
-    return list[(s,e)] inclusive, same logic as your SMPL snippet
-    """
     L = mask_1d.shape[0]
     segments = []
     start = None
@@ -280,44 +342,46 @@ def _split_true_segments(mask_1d: torch.Tensor):
 
 
 def _root_angle_deg(go_seg: torch.Tensor):
-    """
-    go_seg: (T,3) axis-angle
-    return: (T-1,) degrees
-    """
-    R = axis_angle_to_rotation_matrix(go_seg)          # (T,3,3)
-    R_rel = R[:-1].transpose(-1, -2) @ R[1:]           # (T-1,3,3)
+    R = axis_angle_to_rotation_matrix(go_seg)
+    R_rel = R[:-1].transpose(-1, -2) @ R[1:]
     trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
     cos = (trace - 1.0) / 2.0
     cos = torch.clamp(cos, -1.0, 1.0)
     return torch.acos(cos) * (180.0 / math.pi)
 
 
+def _l2_jump(x: torch.Tensor):
+    """
+    x: (T,C) -> (T-1,)
+    """
+    d = x[1:] - x[:-1]
+    return torch.linalg.norm(d, dim=-1)
+
+
 # ============================================================
-# Public API (flattened (L*B, ...) <-> processed <-> flattened)
+# Public API
 # ============================================================
 
 @torch.no_grad()
 def postprocess_human_params(
     params: dict,
     batch_size: int,
-    soft_thr_deg: float = 10.0,
-    hard_thr_deg: float = 20.0,
-    smooth_min_len: int = 11,
-    rot_sigma: float = 1.0,
-    savgol_window: int = 11,
-    savgol_poly: int = 5,
-):
-    """
-    params keys:
-      required:
-        - global_rot: (LB,3) axis-angle
-        - pred_cam_t: (LB,3)
-      optional:
-        - repr:       (LB,D)
-        - mask:       (LB,) bool
 
-    flatten order must be t-major: idx = t*B + b
-    """
+    # --- despike thresholds (ULTRA sensitive) ---
+    soft_thr_deg: float = 6.0,
+    hard_thr_deg: float = 12.0,
+    # any big inter-frame rot jump -> copy prev
+    abs_jump_deg: float = 25.0,
+
+    # any big translation jump -> copy prev (units depend on your scale)
+    abs_jump_trans: float = 0.20,
+
+    # repr jump threshold in L2 (tune if your repr scale differs)
+    abs_jump_repr: float = 0.25,
+
+    # --- smoothing ---
+    smooth_min_len: int = 5,  # even short segments get smoothed
+):
     if batch_size <= 0:
         raise ValueError(f"batch_size must be > 0, got {batch_size}")
 
@@ -366,49 +430,85 @@ def postprocess_human_params(
     else:
         rx = None
 
-    # process per batch element
     for b in range(B):
         segments = _split_true_segments(mk[:, b])
         if not segments:
             continue
 
-        # -------- 1) despike (copy previous for go+tr (+repr)) --------
+        # ===== 1) ULTRA DESPIKE =====
         for s, e in segments:
             T = e - s + 1
-            if T < 3:
+            if T < 2:
                 continue
 
-            ang = _root_angle_deg(go[s:e + 1, b])  # (T-1,)
-            for t in range(1, T - 1):
-                a_prev = ang[t - 1].item()
-                a_next = ang[t].item()
-                if (a_prev > hard_thr_deg and a_next < soft_thr_deg) or (a_next > hard_thr_deg and a_prev < soft_thr_deg):
+            go_seg = go[s:e + 1, b]  # (T,3)
+            tr_seg = tr[s:e + 1, b]  # (T,3)
+            ang = _root_angle_deg(go_seg)  # (T-1,)
+
+            # rotation absolute jump
+            for t in range(1, T):
+                if ang[t - 1].item() > abs_jump_deg:
                     abs_t = s + t
                     go[abs_t, b] = go[abs_t - 1, b]
                     tr[abs_t, b] = tr[abs_t - 1, b]
                     if rx is not None:
                         rx[abs_t, b] = rx[abs_t - 1, b]
 
-        # -------- 2) smoothing (only if long enough) --------
+            # original jump-return pattern (more sensitive)
+            if T >= 3:
+                ang2 = _root_angle_deg(go[s:e + 1, b])
+                for t in range(1, T - 1):
+                    a_prev = ang2[t - 1].item()
+                    a_next = ang2[t].item()
+                    if (a_prev > hard_thr_deg and a_next < soft_thr_deg) or (a_next > hard_thr_deg and a_prev < soft_thr_deg):
+                        abs_t = s + t
+                        go[abs_t, b] = go[abs_t - 1, b]
+                        tr[abs_t, b] = tr[abs_t - 1, b]
+                        if rx is not None:
+                            rx[abs_t, b] = rx[abs_t - 1, b]
+
+            # translation absolute jump
+            tj = _l2_jump(tr[s:e + 1, b])
+            for t in range(1, T):
+                if tj[t - 1].item() > abs_jump_trans:
+                    abs_t = s + t
+                    go[abs_t, b] = go[abs_t - 1, b]
+                    tr[abs_t, b] = tr[abs_t - 1, b]
+                    if rx is not None:
+                        rx[abs_t, b] = rx[abs_t - 1, b]
+
+            # repr absolute jump
+            if rx is not None:
+                rj = _l2_jump(rx[s:e + 1, b])
+                for t in range(1, T):
+                    if rj[t - 1].item() > abs_jump_repr:
+                        abs_t = s + t
+                        go[abs_t, b] = go[abs_t - 1, b]
+                        tr[abs_t, b] = tr[abs_t - 1, b]
+                        rx[abs_t, b] = rx[abs_t - 1, b]
+
+        # ===== 2) ULTRA SMOOTH =====
         for s, e in segments:
             T = e - s + 1
             if T < smooth_min_len:
                 continue
 
-            # global_rot: rotation-aware smoothing
-            go_seg = go[s:e + 1, b]  # (T,3)
-            go[s:e + 1, b] = smooth_axis_angle_quat_mean(go_seg, sigma=rot_sigma)
+            # rotations: overkill rotation smoothing
+            go[s:e + 1, b] = smooth_axis_angle_ultra_overkill(go[s:e + 1, b])
 
-            # pred_cam_t: savgol
-            tr_seg = tr[s:e + 1, b]  # (T,3)
-            tr[s:e + 1, b] = smooth_with_savgol(tr_seg, window_length=savgol_window, polyorder=savgol_poly)
+            # translations: huge gaussian + EMA crush
+            tr_seg = tr[s:e + 1, b]
+            tr_sm = smooth_with_gaussian_conv_ultra(tr_seg, sigma=6.0, passes=4)
+            tr_sm = smooth_with_ema_ultra(tr_sm, alpha=0.90, passes=2)
+            tr[s:e + 1, b] = tr_sm
 
-            # repr: savgol in Euclidean space
+            # repr: huge gaussian + EMA crush
             if rx is not None:
-                rx_seg = rx[s:e + 1, b]  # (T,D)
-                rx[s:e + 1, b] = smooth_with_savgol(rx_seg, window_length=savgol_window, polyorder=min(savgol_poly, savgol_window - 1))
+                rx_seg = rx[s:e + 1, b]
+                rx_sm = smooth_with_gaussian_conv_ultra(rx_seg, sigma=6.0, passes=4)
+                rx_sm = smooth_with_ema_ultra(rx_sm, alpha=0.90, passes=2)
+                rx[s:e + 1, b] = rx_sm
 
-    # flatten back to (LB,*)
     out = dict(params)
     out["global_rot"] = go.view(LB, 3)
     out["pred_cam_t"] = tr.view(LB, 3)
@@ -421,7 +521,7 @@ def postprocess_human_params(
 # Minimal call example (optional)
 # ============================================================
 if __name__ == "__main__":
-    L, B = 20, 4
+    L, B = 60, 4
     LB = L * B
     params = {
         "global_rot": torch.zeros(LB, 3),
@@ -429,5 +529,6 @@ if __name__ == "__main__":
         "repr": torch.randn(LB, 133) * 0.01,
         "mask": torch.ones(LB, dtype=torch.bool),
     }
+
     out = postprocess_human_params(params, batch_size=B)
     print(out["global_rot"].shape, out["pred_cam_t"].shape, out["repr"].shape)
