@@ -13,7 +13,7 @@ from eval.eval_utils.emdb.utils import EMDB1_LIST, EMDB1_NAMES
 
 def inference(args):
     # init configs and cover with cmd options
-    predictor = OfflineApp(use_detector=True)
+    predictor = OfflineApp()
 
     # init data
     test_seq_root = os.path.join(args.data_dir, 'EMDB_ROOT')
@@ -55,57 +55,121 @@ def inference(args):
 
         one_frame = Image.open(frame_list[0]).convert('RGB')
         width, height = one_frame.size
+        batch_size = len(frame_list)
 
         for i in range(0, len(frame_list), batch_size):
             batch_frames = frame_list[i:i + batch_size]
-            inference_state = predictor.predictor.init_state(video_path=batch_frames)
-            predictor.predictor.clear_all_points_in_video(inference_state)
-            predictor.RUNTIME['inference_state'] = inference_state
-            predictor.RUNTIME['out_obj_ids'] = []
-
+            batch_frames = [Image.open(bf).convert("RGB") for bf in batch_frames]
+            resized_batch_frames = resize_images_longest_side(batch_frames)
+            ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
+            # initialise and reset predictor state
+            if predictor.RUNTIME['session_id'] is not None:
+                _ = predictor.predictor.handle_request(
+                    request=dict(
+                        type="reset_session",
+                        session_id=predictor.RUNTIME['session_id'],
+                    )
+                )
+            response = predictor.predictor.handle_request(
+                request=dict(
+                    type="start_session",
+                    resource_path=resized_batch_frames,
+                )
+            )
+            predictor.RUNTIME['session_id'] = response["session_id"]
+            predictor.RUNTIME['out_obj_ids'] = [1]
+            num_objects = 1
             ann_frame_idx = i
 
-            # 1. load bbox (first frame)
-            for obj_id in range(1):
-                seq_name_with_id = f'{seq}_{obj_id}'
-                try:
-                    # only consider the first frame bbox
-                    bbox = bboxes[ann_frame_idx].numpy()
-
-                    one_frame = np.array(Image.open(frame_list[i]).convert('RGB'))
-                    # image = np.array(read_frame_at(args.input_video, starting_frame_idx))
-                    outputs = predictor.sam3_3d_body_model.process_one_image(one_frame, bbox_thr=0.6,)
-                    # 1. load bbox (first frame)
-                    # select the largest box if multiple boxes are detected
-                    best_output = max(
-                        outputs,
-                        key=lambda o: (o['bbox'][2] - o['bbox'][0]) * (o['bbox'][3] - o['bbox'][1])
+            if i == 0:    
+                prompt_text_str = "person"
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    response = predictor.predictor.handle_request(
+                        request=dict(
+                            type="add_prompt",
+                            session_id=predictor.RUNTIME['session_id'],
+                            frame_index=0,
+                            text=prompt_text_str,
+                        )
                     )
-                    xmin, ymin, xmax, ymax = best_output['bbox']
-                    rel_box = np.array(
-                        [[xmin / width, ymin / height, xmax / width, ymax / height]],
-                        dtype=np.float32
-                    )
+                    out = response["outputs"]
+                    
+                    # only focus on target person
+                    obj_dict = {}   # key: inference_id (start from 1), value: sam_id
+                    obj_list = []
+                    for obj_id in range(num_objects):
+                        seq_name_with_id = f'{seq}_{obj_id}'
+                        kp_obj_id = kp[0].numpy()*ratio # 17 x 3
+                        for out_obj_id in out['out_obj_ids']:
+                            if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
+                                obj_dict[obj_id+1] = out_obj_id.item()
+                                obj_list.append(out_obj_id.item())
+                        predictor.RUNTIME['out_obj_ids'].append(obj_id+1)
+                
+                    # # segment on all frames
+                    for out_id in out['out_obj_ids']:
+                        if out_id.item() in obj_list:
+                            continue
+                        response = predictor.predictor.handle_request(
+                            request=dict(
+                                type="remove_object",
+                                session_id=predictor.RUNTIME['session_id'],
+                                obj_id=out_id.item(),
+                            )
+                        )
+                        
+                    outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
+            else:
+                # use previous frame masks as box for other frames
+                pass
 
-                    # # Let's add a box at (x_min, y_min, x_max, y_max) = (300, 0, 500, 400) to get started
-                    # box = np.array([bbox], dtype=np.float32)
-                    # rel_box = [[xmin / width, ymin / height, xmax / width, ymax / height] for xmin, ymin, xmax, ymax in box]
-                    # rel_box = np.array(rel_box, dtype=np.float32)
-                    _, predictor.RUNTIME['out_obj_ids'], low_res_masks, video_res_masks = predictor.predictor.add_new_points_or_box(
-                        inference_state=predictor.RUNTIME['inference_state'],
-                        frame_idx=0,
-                        obj_id=obj_id+1,
-                        box=rel_box,
-                    )
-                except:
-                    break
+            # # 1. load bbox (first frame)
+            # for obj_id in range(1):
+            #     seq_name_with_id = f'{seq}_{obj_id}'
+            #     try:
+            #         # only consider the first frame bbox
+            #         bbox = bboxes[ann_frame_idx].numpy()
 
-            # 3. tracking
-            predictor.on_mask_generation(start_frame_idx=i)
+            #         one_frame = np.array(Image.open(frame_list[i]).convert('RGB'))
+            #         # image = np.array(read_frame_at(args.input_video, starting_frame_idx))
+            #         outputs = predictor.sam3_3d_body_model.process_one_image(one_frame, bbox_thr=0.6,)
+            #         # 1. load bbox (first frame)
+            #         # select the largest box if multiple boxes are detected
+            #         best_output = max(
+            #             outputs,
+            #             key=lambda o: (o['bbox'][2] - o['bbox'][0]) * (o['bbox'][3] - o['bbox'][1])
+            #         )
+            #         xmin, ymin, xmax, ymax = best_output['bbox']
+            #         rel_box = np.array(
+            #             [[xmin / width, ymin / height, xmax / width, ymax / height]],
+            #             dtype=np.float32
+            #         )
+
+            #         # # Let's add a box at (x_min, y_min, x_max, y_max) = (300, 0, 500, 400) to get started
+            #         # box = np.array([bbox], dtype=np.float32)
+            #         # rel_box = [[xmin / width, ymin / height, xmax / width, ymax / height] for xmin, ymin, xmax, ymax in box]
+            #         # rel_box = np.array(rel_box, dtype=np.float32)
+            #         _, predictor.RUNTIME['out_obj_ids'], low_res_masks, video_res_masks = predictor.predictor.add_new_points_or_box(
+            #             inference_state=predictor.RUNTIME['inference_state'],
+            #             frame_idx=0,
+            #             obj_id=obj_id+1,
+            #             box=rel_box,
+            #         )
+            #     except:
+            #         break
+
+            # 3. save masks
+            predictor.save_masks(
+                start_frame_idx=i, 
+                outputs_per_frame=outputs_per_frame, 
+                obj_dict=obj_dict, 
+                resized_batch_frames=resized_batch_frames,
+                original_size=(width, height),
+            )
         # 4. hmr upon masks
 
-        if len(kp_list) == 0:
-            kp_list = None
+        # if len(kp_list) == 0:
+        #     kp_list = None
 
         with torch.autocast("cuda", enabled=False):
             predictor.on_4d_generation(frame_list, kps_list=None)

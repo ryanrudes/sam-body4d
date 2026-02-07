@@ -9,25 +9,6 @@ sys.path.append(os.path.dirname(current_dir))
 from offline_app_mask_kp import *
 from eval.eval_utils.kp_in_mask import majority_keypoints_in_mask
 
-from typing import List
-def resize_images_longest_side(
-    images: List[Image.Image],
-    max_side: int = 1280
-) -> List[Image.Image]:
-    resized = []
-    for img in images:
-        w, h = img.size
-        scale = max_side / max(w, h)
-        if scale >= 1.0:
-            resized.append(img)
-            continue
-        new_w = int(round(w * scale))
-        new_h = int(round(h * scale))
-        resized.append(
-            img.resize((new_w, new_h), Image.BICUBIC)
-        )
-    return resized
-
 
 def inference(args):
     # init configs and cover with cmd options
@@ -45,8 +26,8 @@ def inference(args):
     # inference
     for seq in tqdm(test_seq_name_list):
         # 0. init outputs
-        if seq=='downtown_arguing_00' or seq=='downtown_bar_00':
-            continue
+        # if seq=='downtown_arguing_00' or seq=='downtown_bar_00':
+        #     continue
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir
         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
@@ -91,7 +72,6 @@ def inference(args):
             )
             predictor.RUNTIME['session_id'] = response["session_id"]
             predictor.RUNTIME['out_obj_ids'] = []
-            ann_frame_idx = i
 
             # 1. load bbox (first frame)
             if i == 0:    
@@ -117,24 +97,32 @@ def inference(args):
                             if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
                                 obj_dict[obj_id+1] = out_obj_id.item()
                                 obj_list.append(out_obj_id.item())
+                        predictor.RUNTIME['out_obj_ids'].append(obj_id+1)
                 
                     # # segment on all frames
-                    # for out_id in out['out_obj_ids']:
-                    #     if out_id.item() in obj_list:
-                    #         continue
-                    #     response = predictor.predictor.handle_request(
-                    #         request=dict(
-                    #             type="remove_object",
-                    #             session_id=predictor.RUNTIME['session_id'],
-                    #             obj_id=out_id.item(),
-                    #         )
-                    #     )
-                    outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'])
+                    for out_id in out['out_obj_ids']:
+                        if out_id.item() in obj_list:
+                            continue
+                        response = predictor.predictor.handle_request(
+                            request=dict(
+                                type="remove_object",
+                                session_id=predictor.RUNTIME['session_id'],
+                                obj_id=out_id.item(),
+                            )
+                        )
+                        
+                    outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
             else:
                 # use previous frame masks as box for other frames
                 pass
-            # 3. tracking
-            predictor.on_mask_generation(start_frame_idx=i)
+            # 3. save masks
+            predictor.save_masks(
+                start_frame_idx=i, 
+                outputs_per_frame=outputs_per_frame, 
+                obj_dict=obj_dict, 
+                resized_batch_frames=resized_batch_frames,
+                original_size=(width, height),
+            )
         # 4. hmr upon masks
 
         kps_list = []
@@ -148,7 +136,7 @@ def inference(args):
             kps_list = None
 
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=kps_list)
+            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
 
 
 if __name__ == "__main__":

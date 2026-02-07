@@ -2187,55 +2187,55 @@ class SAM3DBody(BaseModel):
 			#     "hand":      dict(q_pos=4e-4, q_vel=4e-4, r_obs=1.2e-1),
 			# }
 
-			# -----------------
-			# smooth body pose & hand
-			pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
-				pose_output["mhr"],
-				num_frames=len(img_list),
-				frame_obj_ids=id_batch,
-				keys_to_smooth=["body_pose", "hand"],
-				# kalman_cfg=kalman_cfg,
-			)
+			# # -----------------
+			# # smooth body pose & hand
+			# pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+			# 	pose_output["mhr"],
+			# 	num_frames=len(img_list),
+			# 	frame_obj_ids=id_batch,
+			# 	keys_to_smooth=["body_pose", "hand"],
+			# 	# kalman_cfg=kalman_cfg,
+			# )
 
-			pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
-				mhr_dict=pose_output["mhr"],
-				num_frames=len(img_list),
-				frame_obj_ids=id_batch,
-				keys_to_smooth=["body_pose", "hand"],
-				kalman_cfg=None,
-				vis_flags=occ_dict
-			)
+			# pose_output["mhr"] = kalman_smooth_mhr_params_per_obj_id_adaptive(
+			# 	mhr_dict=pose_output["mhr"],
+			# 	num_frames=len(img_list),
+			# 	frame_obj_ids=id_batch,
+			# 	keys_to_smooth=["body_pose", "hand"],
+			# 	kalman_cfg=None,
+			# 	vis_flags=occ_dict
+			# )
 
-			# -----------------
-			# keep shape & scale same as the first frame
-			num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
-			scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
-			shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
-			B, D_scale = scale.shape
-			_, D_shape = shape.shape
-			num_frames = len(img_list)
-			# Reshape to (T, N, D) so that we can index by (frame, human)
-			scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
-			shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
-			# For each human id, use its scale/shape from the first frame (t=0)
-			# and assign it to all frames for that human.
-			for hid in range(num_human):
-				# (28,) and (45,), values at t=0 for this human
-				if hid not in mhr_shape_scale_dict:
-					mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
-					first_scale = scale_3d[0, hid].clone()
-					first_shape = shape_3d[0, hid].clone()
-				else:
-					first_scale, first_shape = mhr_shape_scale_dict[hid]
-				# Broadcast to all time steps for this human
-				scale_3d[:, hid, :] = first_scale
-				shape_3d[:, hid, :] = first_shape
-			# Back to original shape: (B, D)
-			pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
-			pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
+			# # -----------------
+			# # keep shape & scale same as the first frame
+			# num_human = pose_output["mhr"]["shape"].shape[0] // len(img_list)
+			# scale = pose_output["mhr"]["scale"]  # shape: (B, 28)
+			# shape = pose_output["mhr"]["shape"]  # shape: (B, 45)
+			# B, D_scale = scale.shape
+			# _, D_shape = shape.shape
+			# num_frames = len(img_list)
+			# # Reshape to (T, N, D) so that we can index by (frame, human)
+			# scale_3d = scale.view(num_frames, num_human, D_scale)   # (T, N, 28)
+			# shape_3d = shape.view(num_frames, num_human, D_shape)   # (T, N, 45)
+			# # For each human id, use its scale/shape from the first frame (t=0)
+			# # and assign it to all frames for that human.
+			# for hid in range(num_human):
+			# 	# (28,) and (45,), values at t=0 for this human
+			# 	if hid not in mhr_shape_scale_dict:
+			# 		mhr_shape_scale_dict[hid] = [scale_3d[0, hid].clone(), shape_3d[0, hid].clone()]
+			# 		first_scale = scale_3d[0, hid].clone()
+			# 		first_shape = shape_3d[0, hid].clone()
+			# 	else:
+			# 		first_scale, first_shape = mhr_shape_scale_dict[hid]
+			# 	# Broadcast to all time steps for this human
+			# 	scale_3d[:, hid, :] = first_scale
+			# 	shape_3d[:, hid, :] = first_shape
+			# # Back to original shape: (B, D)
+			# pose_output["mhr"]["scale"] = scale_3d.view(B, D_scale)
+			# pose_output["mhr"]["shape"] = shape_3d.view(B, D_shape)
 
-			# # # -----------------
-			# # # smooth global rot
+			# # -----------------
+			# # smooth global rot
 			# pose_output["mhr"] = ema_smooth_global_rot_per_obj_id_adaptive(
 			#     mhr_dict=pose_output["mhr"],
 			#     num_frames=len(img_list),
@@ -2244,43 +2244,100 @@ class SAM3DBody(BaseModel):
 			#     key_name="global_rot",
 			# )
 
-			# params = {
-			# 	"global_rot": pose_output["mhr"]["global_rot"],
-			# 	"pred_cam_t": pose_output["mhr"]['pred_cam_t'],
-			# 	"repr": pose_output["mhr"]["body_pose"],
-			# 	"mask": torch.ones(pose_output["mhr"]["global_rot"].shape[0], dtype=torch.bool),
-			# }
-			# out = postprocess_human_params(params, batch_size=batch_size)
-			# pose_output["mhr"]["global_rot"] = out["global_rot"]
-			# pose_output["mhr"]['pred_cam_t'] = out['pred_cam_t']
-			# pose_output["mhr"]["body_pose"] = out["repr"]
+			# body
+			# ======= CALL SITE (copy-paste) =======
+			# Assumes you imported:
+			#   from models.meta_arch.post_process import postprocess_human_params
+			# and pose_output is your dict.
 
-			verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
-				self.head_pose.mhr_forward(
-					global_trans=pose_output["mhr"]["global_rot"] * 0,
-					global_rot=pose_output["mhr"]["global_rot"],
-					body_pose_params=pose_output["mhr"]["body_pose"],
-					hand_pose_params=pose_output["mhr"]["hand"],
-					scale_params=pose_output["mhr"]["scale"],
-					shape_params=pose_output["mhr"]["shape"],
-					expr_params=pose_output["mhr"]["face"],
-					return_keypoints=True,
-					return_joint_coords=True,
-					return_model_params=True,
-					return_joint_rotations=True,
-				)
+			def _mk_mask_from_nan_rows(x: torch.Tensor) -> torch.Tensor:
+				return torch.isfinite(x).all(dim=-1)
+
+			# -------------------------
+			# body_pose: (L,133)
+			# -------------------------
+			if ("mhr" in pose_output) and ("body_pose" in pose_output["mhr"]) and (pose_output["mhr"]["body_pose"] is not None):
+				body_pose = pose_output["mhr"]["body_pose"]
+
+				params = {
+					"repr": body_pose,  # may contain all-NaN rows for missing frames
+					# OPTIONAL: if you already have valid mask, pass it; otherwise omit it.
+					# "mask": your_mask_bool_L,
+				}
+
+				# body_pose: (L,133)
+			out = postprocess_human_params(
+				params,
+				batch_size=1,
+				order="auto",
+
+				spike_w=8,
+				spike_ratio_thr=3.2,
+				spike_abs_thr_deg=14.0,
+				spike_expand=2,
+				missing_max_gap=96,
+
+				base_sigma=3.0,
+				smooth_passes=3,
+
+				enable_extra_strong_topk=True,
+				extra_strong_topk=48,     # ⭐ elbow killer
+				extra_strong_sigma=9.5,
+				extra_strong_passes=5,
+
+				enable_strong_groups=True,
+				strong_groups_body133=[(31,32,33),(41,42,43)],
+
+				enable_pos_gaussian=True,
+				pos_sigma=1.0,
+				pos_passes=1,
 			)
-			j3d = j3d[:, :70]  # 308 --> 70 keypoints
-			verts[..., [1, 2]] *= -1  # Camera system difference
-			j3d[..., [1, 2]] *= -1  # Camera system difference
-			jcoords[..., [1, 2]] *= -1
-			pose_output["mhr"]["pred_keypoints_3d"] = j3d
-			pose_output["mhr"]["pred_vertices"] = verts
-			pose_output["mhr"]["pred_joint_coords"] = jcoords
-			pose_output["mhr"]["pred_pose_raw"][
-				...
-			] = 0  # pred_pose_raw is not valid anymore
-			pose_output["mhr"]["mhr_model_params"] = mhr_model_params
+			pose_output["mhr"]["body_pose"] = out["repr"]
+
+			
+
+			# -------------------------
+			# hand: (L,108)
+			# -------------------------
+			if ("mhr" in pose_output) and ("hand" in pose_output["mhr"]) and (pose_output["mhr"]["hand"] is not None):
+				hand = pose_output["mhr"]["hand"]
+				params_h = {
+					"repr": hand,  # may contain all-NaN rows too
+					# "mask": your_mask_bool_L,
+				}
+
+				out_h = postprocess_human_params(
+					params_h,
+					batch_size=1,
+					order="auto",
+
+					# spike detect（手更敏感）
+					spike_w=10,
+					spike_ratio_thr=2.0,
+					spike_abs_thr_deg=6.0,
+					spike_expand=4,
+
+					missing_max_gap=96,
+
+					# 连续平滑更强
+					base_sigma=3.6,
+					smooth_passes=4,
+
+					enable_extra_strong_topk=True,
+					extra_strong_topk=24,
+					extra_strong_sigma=7.0,
+					extra_strong_passes=2,
+
+					# hand 不是 133，这里强约束组不会触发（安全）
+					enable_strong_groups=True,
+
+					enable_pos_gaussian=True,
+					pos_sigma=1.2,
+					pos_passes=1,
+				)
+				pose_output["mhr"]["hand"] = out_h["repr"]
+
+
 
 		########################################################
 		# Project to 2D

@@ -1,534 +1,725 @@
-# smooth_human_lb_ultra.py
-# Single-file, self-contained.
+# post_process.py
+# Drop-in postprocess for (L, D), robust to missing frames (all-NaN rows).
+# Works for D=133 (body_pose) and D=108 (hand), single-person or multi-person (L=T*N).
 #
-# ULTRA / OVERKILL STRONG SMOOTHING VERSION
-# - For “super aggressive” smoothing of large jitter.
-# - You can dial back later.
+# Key features:
+#  - NEVER crash on missing frames / NaN rows
+#  - spike detect (scalar) + linear inpaint (gap-limited)
+#  - velocity-domain gaussian smoothing (continuous, reduces "顿挫")
+#  - optional tiny position gaussian to shave micro-steps
+#  - strong constraint for specific 3-dim Euler groups (quat spike -> slerp inpaint -> quat EMA)
+#  - index-free "extra-strong topK dims" smoothing (often stabilizes elbow/knee/etc without knowing indices)
 #
-# Key changes vs normal:
-#   1) Much more aggressive despike:
-#        - original "jump-return" pattern
-#        - + absolute jump threshold (any big inter-frame jump -> copy prev)
-#   2) Rotations:
-#        - big sigma + multiple passes
-#        - optional extra "local slerp" relaxation pass
-#   3) Translation / repr:
-#        - heavy Gaussian conv (large sigma, multiple passes)
-#        - optional EMA blend to further crush jitter
-#
-# Public API:
-#   postprocess_human_params(params: dict, batch_size: int) -> dict
-#
-# Flatten order must be t-major: idx = t*B + b
+# Backward-compat:
+#  - accepts enable_strong_fix as alias of enable_strong_groups
+#  - accepts enable_wrist_fix / wrist_* as alias of strong_* for D==133 (if you still pass those)
 
+from __future__ import annotations
+from typing import Dict, Optional, List, Tuple
 import math
 import torch
 import torch.nn.functional as F
+import roma  # already in your project
 
 
-# ============================================================
-# Axis-angle <-> rotmat
-# ============================================================
-
-def axis_angle_to_rotation_matrix(aa: torch.Tensor) -> torch.Tensor:
-    eps = 1e-8
-    theta = torch.linalg.norm(aa, dim=-1, keepdim=True).clamp_min(eps)
-    axis = aa / theta
-    x, y, z = axis.unbind(dim=-1)
-
-    zeros = torch.zeros_like(x)
-    K = torch.stack(
-        [
-            zeros, -z, y,
-            z, zeros, -x,
-            -y, x, zeros,
-        ],
-        dim=-1,
-    ).reshape(aa.shape[:-1] + (3, 3))
-
-    I = torch.eye(3, device=aa.device, dtype=aa.dtype).expand(aa.shape[:-1] + (3, 3))
-    ct = torch.cos(theta)[..., None]
-    st = torch.sin(theta)[..., None]
-    return I + st * K + (1.0 - ct) * (K @ K)
+# -----------------------------
+# helpers: reshape LxD <-> TxNxD
+# -----------------------------
+def _to_tnd(x: torch.Tensor, num_person: int) -> torch.Tensor:
+    assert x.dim() == 2, f"expect (L,D), got {tuple(x.shape)}"
+    L, D = x.shape
+    assert num_person >= 1
+    assert L % num_person == 0, f"L({L}) must be divisible by num_person({num_person})"
+    T = L // num_person
+    return x.view(T, num_person, D)
 
 
-def rotation_matrix_to_axis_angle(R: torch.Tensor) -> torch.Tensor:
-    eps = 1e-8
-    trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-    cos = (trace - 1.0) / 2.0
-    cos = torch.clamp(cos, -1.0, 1.0)
-    theta = torch.acos(cos)
-
-    rx = R[..., 2, 1] - R[..., 1, 2]
-    ry = R[..., 0, 2] - R[..., 2, 0]
-    rz = R[..., 1, 0] - R[..., 0, 1]
-    r = torch.stack([rx, ry, rz], dim=-1)
-
-    sin_theta = torch.sin(theta).clamp_min(eps)[..., None]
-    axis = r / (2.0 * sin_theta)
-    aa = axis * theta[..., None]
-
-    small = theta < 1e-4
-    if small.any():
-        aa_small = 0.5 * r
-        aa = torch.where(small[..., None], aa_small, aa)
-    return aa
+def _from_tnd(x: torch.Tensor) -> torch.Tensor:
+    assert x.dim() == 3
+    T, N, D = x.shape
+    return x.reshape(T * N, D)
 
 
-# ============================================================
-# Rotmat <-> quaternion (w,x,y,z) + Markley mean
-# ============================================================
-
-def _rotmat_to_quat(R: torch.Tensor) -> torch.Tensor:
-    m00, m11, m22 = R[..., 0, 0], R[..., 1, 1], R[..., 2, 2]
-    trace = m00 + m11 + m22
-
-    def _norm(q):
-        q = F.normalize(q, dim=-1)
-        return torch.where(q[..., :1] < 0, -q, q)
-
-    t = trace + 1.0
-    s = torch.sqrt(torch.clamp(t, min=1e-8)) * 2.0
-    qw = 0.25 * s
-    qx = (R[..., 2, 1] - R[..., 1, 2]) / s
-    qy = (R[..., 0, 2] - R[..., 2, 0]) / s
-    qz = (R[..., 1, 0] - R[..., 0, 1]) / s
-    q_trace = _norm(torch.stack([qw, qx, qy, qz], dim=-1))
-
-    cond1 = (m00 > m11) & (m00 > m22)
-    cond2 = (m11 > m22)
-
-    s1 = torch.sqrt(torch.clamp(1.0 + m00 - m11 - m22, min=1e-8)) * 2.0
-    qw1 = (R[..., 2, 1] - R[..., 1, 2]) / s1
-    qx1 = 0.25 * s1
-    qy1 = (R[..., 0, 1] + R[..., 1, 0]) / s1
-    qz1 = (R[..., 0, 2] + R[..., 2, 0]) / s1
-    q1 = _norm(torch.stack([qw1, qx1, qy1, qz1], dim=-1))
-
-    s2 = torch.sqrt(torch.clamp(1.0 + m11 - m00 - m22, min=1e-8)) * 2.0
-    qw2 = (R[..., 0, 2] - R[..., 2, 0]) / s2
-    qx2 = (R[..., 0, 1] + R[..., 1, 0]) / s2
-    qy2 = 0.25 * s2
-    qz2 = (R[..., 1, 2] + R[..., 2, 1]) / s2
-    q2 = _norm(torch.stack([qw2, qx2, qy2, qz2], dim=-1))
-
-    s3 = torch.sqrt(torch.clamp(1.0 + m22 - m00 - m11, min=1e-8)) * 2.0
-    qw3 = (R[..., 1, 0] - R[..., 0, 1]) / s3
-    qx3 = (R[..., 0, 2] + R[..., 2, 0]) / s3
-    qy3 = (R[..., 1, 2] + R[..., 2, 1]) / s3
-    qz3 = 0.25 * s3
-    q3 = _norm(torch.stack([qw3, qx3, qy3, qz3], dim=-1))
-
-    q_else = torch.where(cond2[..., None], q2, q3)
-    q_else = torch.where(cond1[..., None], q1, q_else)
-    use_trace = trace > 0.0
-    return torch.where(use_trace[..., None], q_trace, q_else)
+def _to_tn(mask: torch.Tensor, num_person: int) -> torch.Tensor:
+    assert mask.dim() == 1
+    L = mask.numel()
+    assert num_person >= 1
+    assert L % num_person == 0, f"L({L}) must be divisible by num_person({num_person})"
+    T = L // num_person
+    return mask.view(T, num_person)
 
 
-def _quat_to_rotmat(q: torch.Tensor) -> torch.Tensor:
-    q = F.normalize(q, dim=-1)
-    w, x, y, z = q.unbind(dim=-1)
-
-    ww, xx, yy, zz = w*w, x*x, y*y, z*z
-    wx, wy, wz = w*x, w*y, w*z
-    xy, xz, yz = x*y, x*z, y*z
-
-    R = torch.stack(
-        [
-            ww + xx - yy - zz, 2*(xy - wz),       2*(xz + wy),
-            2*(xy + wz),       ww - xx + yy - zz, 2*(yz - wx),
-            2*(xz - wy),       2*(yz + wx),       ww - xx - yy + zz,
-        ],
-        dim=-1,
-    ).reshape(q.shape[:-1] + (3, 3))
-    return R
+def _finite_row_mask(x: torch.Tensor) -> torch.Tensor:
+    """(L,D) -> (L,) True if the whole row is finite."""
+    if x.numel() == 0:
+        return torch.zeros((0,), device=x.device, dtype=torch.bool)
+    return torch.isfinite(x).all(dim=-1)
 
 
-def _gaussian_weights(radius: int, sigma: float, device, dtype):
-    d = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
-    w = torch.exp(-(d * d) / (2.0 * sigma * sigma))
-    return w / w.sum()
-
-
-def _quat_weighted_mean_markley(q: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    q0 = q[0]
-    sign = torch.sign((q * q0).sum(dim=-1, keepdim=True))
-    sign = torch.where(sign >= 0, torch.ones_like(sign), -torch.ones_like(sign))
-    q = q * sign
-
-    A = (w[:, None, None] * (q[:, :, None] @ q[:, None, :])).sum(dim=0)  # (4,4)
-    evals, evecs = torch.linalg.eigh(A)
-    qm = evecs[:, -1]
-    qm = F.normalize(qm, dim=0)
-    if qm[0] < 0:
-        qm = -qm
-    return qm
-
-
-@torch.no_grad()
-def smooth_axis_angle_quat_mean_ultra(aa: torch.Tensor, sigma: float = 5.0, passes: int = 4) -> torch.Tensor:
+# -----------------------------
+# robust window predictor (exclude current frame)
+# -----------------------------
+def _robust_pred_excluding_center(x_t: torch.Tensor) -> torch.Tensor:
     """
-    aa: (T,3)
-    ULTRA: sigma=5.0, passes=4  (yes, it will smear motion)
+    x_t: (W, ...) where W is odd and includes center element.
+    Return robust prediction using median of neighbors excluding center.
     """
-    T = aa.shape[0]
-    if T <= 1:
-        return aa
-
-    out = aa
-    for _ in range(max(1, int(passes))):
-        device, dtype = out.device, out.dtype
-        radius = max(1, int(math.ceil(3.0 * sigma)))
-        w = _gaussian_weights(radius, sigma, device=device, dtype=dtype)
-        K = 2 * radius + 1
-
-        R = axis_angle_to_rotation_matrix(out)
-        q = _rotmat_to_quat(R)
-        q_pad = torch.cat([q[:1].expand(radius, 4), q, q[-1:].expand(radius, 4)], dim=0)
-
-        q_out = torch.empty_like(q)
-        for t in range(T):
-            q_win = q_pad[t:t + K]
-            q_out[t] = _quat_weighted_mean_markley(q_win, w)
-
-        out = rotation_matrix_to_axis_angle(_quat_to_rotmat(q_out))
-    return out
+    W = x_t.shape[0]
+    assert W >= 3 and (W % 2 == 1), "window W should be odd and >=3"
+    c = W // 2
+    neigh = torch.cat([x_t[:c], x_t[c + 1 :]], dim=0)
+    return neigh.median(dim=0).values
 
 
-# ============================================================
-# Optional extra relaxation: local slerp to neighbors (ULTRA)
-# ============================================================
-
-def _slerp(q0: torch.Tensor, q1: torch.Tensor, t: float) -> torch.Tensor:
+# -----------------------------
+# spike detection for scalar dims
+# -----------------------------
+def _detect_spikes_scalar(
+    x: torch.Tensor,            # (T,N,D)
+    vis: torch.Tensor,          # (T,N) bool
+    spike_w: int = 7,           # odd window
+    ratio_thr: float = 3.0,
+    abs_thr_deg: float = 10.0,
+    expand: int = 2,
+) -> torch.Tensor:
     """
-    q0,q1: (...,4) unit quats (wxyz)
+    Return spike_mask: (T,N,D) bool
+    NOTE: x may contain NaNs at invisible frames; we nan_to_num + gate by vis.
     """
-    q0 = F.normalize(q0, dim=-1)
-    q1 = F.normalize(q1, dim=-1)
-    dot = (q0 * q1).sum(dim=-1, keepdim=True)
-    q1 = torch.where(dot < 0, -q1, q1)
-    dot = dot.abs().clamp(-1.0, 1.0)
+    T, N, D = x.shape
+    if T < 3:
+        return torch.zeros((T, N, D), dtype=torch.bool, device=x.device)
 
-    # if very close, lerp
-    close = dot > 0.9995
-    q = q0 + t * (q1 - q0)
-    q = F.normalize(q, dim=-1)
+    W = spike_w + (spike_w % 2 == 0)
+    W = max(W, 3)
+    pad = W // 2
 
-    theta0 = torch.acos(dot)
-    sin0 = torch.sin(theta0).clamp_min(1e-8)
-    theta = theta0 * t
-    s0 = torch.sin(theta0 - theta) / sin0
-    s1 = torch.sin(theta) / sin0
-    qs = s0 * q0 + s1 * q1
-    qs = F.normalize(qs, dim=-1)
+    x_safe = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    x_pad = torch.cat([x_safe[:1].repeat(pad, 1, 1), x_safe, x_safe[-1:].repeat(pad, 1, 1)], dim=0)
 
-    return torch.where(close, q, qs)
+    spike = torch.zeros((T, N, D), dtype=torch.bool, device=x.device)
+    abs_thr = abs_thr_deg * (math.pi / 180.0)
+
+    for t in range(T):
+        if not vis[t].any():
+            continue
+        wchunk = x_pad[t : t + W]  # (W,N,D)
+        pred = _robust_pred_excluding_center(wchunk)  # (N,D)
+        cur = x_safe[t]
+
+        diff = (cur - pred).abs()
+        neigh = torch.cat([wchunk[:pad], wchunk[pad + 1 :]], dim=0)  # (W-1,N,D)
+        scale = (neigh - pred.unsqueeze(0)).abs().median(dim=0).values
+        scale = torch.clamp(scale, min=1e-6)
+
+        ratio = diff / scale
+        bad = (ratio > ratio_thr) & (diff > abs_thr)
+        bad = bad & vis[t].unsqueeze(-1)
+        spike[t] = bad
+
+    if expand > 0:
+        s = spike.permute(1, 2, 0).float()  # (N,D,T)
+        k = 2 * expand + 1
+        s = F.max_pool1d(s, kernel_size=k, stride=1, padding=expand)
+        spike = (s > 0).permute(2, 0, 1).contiguous()
+
+    return spike
 
 
-@torch.no_grad()
-def relax_quat_local(q: torch.Tensor, alpha: float = 0.65, passes: int = 3) -> torch.Tensor:
+# -----------------------------
+# inpaint (gap-limited), optionally fill missing too (internal)
+# -----------------------------
+def _inpaint_scalar_linear(
+    x: torch.Tensor,                # (T,N,D)
+    need_fill: torch.Tensor,        # (T,N,D) bool  True => replace by interpolation
+    valid: torch.Tensor,            # (T,N) bool    True => this frame is a "real observation" (anchor)
+    max_gap: int = 96,
+) -> torch.Tensor:
     """
-    q: (T,4) wxyz
-    Each pass: pull each frame toward mean of neighbors via slerp.
-    alpha: how strong the pull is (0..1)
+    Linear inpaint per-dim:
+      - anchors are frames where valid==True and need_fill==False
+      - frames with need_fill==True will be interpolated between nearest anchors (gap-limited)
+    This is safe for NaNs because we should pass x_safe.
     """
-    T = q.shape[0]
-    if T <= 2:
-        return q
+    T, N, D = x.shape
+    out = x.clone()
 
-    out = q
-    for _ in range(max(1, int(passes))):
-        prev = out[:-2]
-        mid = out[1:-1]
-        nxt = out[2:]
-        # neighbor "mean" approx by slerp(prev,nxt,0.5)
-        nn = _slerp(prev, nxt, 0.5)
-        mid2 = _slerp(mid, nn, float(alpha))
-        out = torch.cat([out[:1], mid2, out[-1:]], dim=0)
-    return out
+    if T < 2:
+        return out
 
+    idx = torch.arange(T, device=x.device)
 
-@torch.no_grad()
-def smooth_axis_angle_ultra_overkill(aa: torch.Tensor) -> torch.Tensor:
-    """
-    aa: (T,3) -> (T,3)
-    Overkill pipeline: Markley mean (huge) + local relax
-    """
-    if aa.shape[0] <= 1:
-        return aa
-    R = axis_angle_to_rotation_matrix(aa)
-    q = _rotmat_to_quat(R)
-    # ultra mean
-    aa1 = smooth_axis_angle_quat_mean_ultra(aa, sigma=5.0, passes=4)
-    R1 = axis_angle_to_rotation_matrix(aa1)
-    q1 = _rotmat_to_quat(R1)
-    # extra relax
-    q2 = relax_quat_local(q1, alpha=0.65, passes=3)
-    return rotation_matrix_to_axis_angle(_quat_to_rotmat(q2))
-
-
-# ============================================================
-# Strong Gaussian conv smoothing (Euclidean) + EMA crush
-# ============================================================
-
-@torch.no_grad()
-def smooth_with_gaussian_conv_ultra(x: torch.Tensor, sigma: float = 6.0, passes: int = 4) -> torch.Tensor:
-    """
-    x: (T,C) smooth along T by 1D Gaussian conv (replicate padding)
-    ULTRA: sigma=6.0, passes=4
-    """
-    if x.ndim != 2:
-        raise ValueError(f"smooth_with_gaussian_conv_ultra expects (T,C), got {tuple(x.shape)}")
-    T, C = x.shape
-    if T <= 1:
-        return x
-
-    out = x
-    for _ in range(max(1, int(passes))):
-        device, dtype = out.device, out.dtype
-        radius = max(1, int(math.ceil(3.0 * sigma)))
-        w = _gaussian_weights(radius, sigma, device=device, dtype=dtype)
-        m = radius
-
-        out_pad = torch.cat([out[:1].expand(m, C), out, out[-1:].expand(m, C)], dim=0)
-        xp = out_pad.t().unsqueeze(0)  # (1,C,T+2m)
-
-        weight = w.view(1, 1, -1).expand(C, 1, -1)
-        y = F.conv1d(xp, weight, padding=0, groups=C)  # (1,C,T)
-        out = y.squeeze(0).t()
-    return out
-
-
-@torch.no_grad()
-def smooth_with_ema_ultra(x: torch.Tensor, alpha: float = 0.90, passes: int = 2) -> torch.Tensor:
-    """
-    x: (T,C)
-    EMA: y[t] = alpha*y[t-1] + (1-alpha)*x[t]
-    ULTRA: alpha=0.90, passes=2
-    """
-    if x.ndim != 2:
-        raise ValueError(f"smooth_with_ema_ultra expects (T,C), got {tuple(x.shape)}")
-    T, C = x.shape
-    if T <= 1:
-        return x
-
-    out = x
-    for _ in range(max(1, int(passes))):
-        y = torch.empty_like(out)
-        y[0] = out[0]
-        for t in range(1, T):
-            y[t] = alpha * y[t - 1] + (1.0 - alpha) * out[t]
-        out = y
-    return out
-
-
-# ============================================================
-# Spike metric + segment split
-# ============================================================
-
-def _split_true_segments(mask_1d: torch.Tensor):
-    L = mask_1d.shape[0]
-    segments = []
-    start = None
-    for i in range(L):
-        if mask_1d[i] and start is None:
-            start = i
-        elif (not mask_1d[i]) and start is not None:
-            segments.append((start, i - 1))
-            start = None
-    if start is not None:
-        segments.append((start, L - 1))
-    return segments
-
-
-def _root_angle_deg(go_seg: torch.Tensor):
-    R = axis_angle_to_rotation_matrix(go_seg)
-    R_rel = R[:-1].transpose(-1, -2) @ R[1:]
-    trace = R_rel[..., 0, 0] + R_rel[..., 1, 1] + R_rel[..., 2, 2]
-    cos = (trace - 1.0) / 2.0
-    cos = torch.clamp(cos, -1.0, 1.0)
-    return torch.acos(cos) * (180.0 / math.pi)
-
-
-def _l2_jump(x: torch.Tensor):
-    """
-    x: (T,C) -> (T-1,)
-    """
-    d = x[1:] - x[:-1]
-    return torch.linalg.norm(d, dim=-1)
-
-
-# ============================================================
-# Public API
-# ============================================================
-
-@torch.no_grad()
-def postprocess_human_params(
-    params: dict,
-    batch_size: int,
-
-    # --- despike thresholds (ULTRA sensitive) ---
-    soft_thr_deg: float = 6.0,
-    hard_thr_deg: float = 12.0,
-    # any big inter-frame rot jump -> copy prev
-    abs_jump_deg: float = 25.0,
-
-    # any big translation jump -> copy prev (units depend on your scale)
-    abs_jump_trans: float = 0.20,
-
-    # repr jump threshold in L2 (tune if your repr scale differs)
-    abs_jump_repr: float = 0.25,
-
-    # --- smoothing ---
-    smooth_min_len: int = 5,  # even short segments get smoothed
-):
-    if batch_size <= 0:
-        raise ValueError(f"batch_size must be > 0, got {batch_size}")
-
-    if "global_rot" not in params or "pred_cam_t" not in params:
-        raise KeyError("params must contain 'global_rot' and 'pred_cam_t'")
-
-    global_rot = params["global_rot"]
-    pred_cam_t = params["pred_cam_t"]
-
-    if global_rot.ndim != 2 or global_rot.shape[1] != 3:
-        raise ValueError(f"global_rot expected (LB,3), got {tuple(global_rot.shape)}")
-    if pred_cam_t.ndim != 2 or pred_cam_t.shape[1] != 3:
-        raise ValueError(f"pred_cam_t expected (LB,3), got {tuple(pred_cam_t.shape)}")
-
-    LB = global_rot.shape[0]
-    if pred_cam_t.shape[0] != LB:
-        raise ValueError(f"LB mismatch: global_rot {LB}, pred_cam_t {pred_cam_t.shape[0]}")
-    if LB % batch_size != 0:
-        raise ValueError(f"LB={LB} is not divisible by batch_size={batch_size}")
-
-    L = LB // batch_size
-    B = batch_size
-    device = global_rot.device
-
-    mask = params.get("mask", None)
-    if mask is None:
-        mask = torch.ones(LB, dtype=torch.bool, device=device)
-    else:
-        mask = mask.bool().to(device=device)
-        if mask.numel() != LB:
-            raise ValueError(f"mask length {mask.numel()} != LB {LB}")
-
-    repr_x = params.get("repr", None)
-    if repr_x is not None:
-        if repr_x.ndim != 2 or repr_x.shape[0] != LB:
-            raise ValueError(f"repr expected (LB,D), got {tuple(repr_x.shape)}")
-
-    # reshape to (L,B,*)
-    go = global_rot.detach().clone().view(L, B, 3)
-    tr = pred_cam_t.detach().clone().view(L, B, 3)
-    mk = mask.view(L, B)
-
-    if repr_x is not None:
-        D = repr_x.shape[1]
-        rx = repr_x.detach().clone().view(L, B, D)
-    else:
-        rx = None
-
-    for b in range(B):
-        segments = _split_true_segments(mk[:, b])
-        if not segments:
+    for n in range(N):
+        v_n = valid[:, n]
+        if v_n.sum() < 2:
             continue
 
-        # ===== 1) ULTRA DESPIKE =====
-        for s, e in segments:
-            T = e - s + 1
-            if T < 2:
+        for d in range(D):
+            fill_td = need_fill[:, n, d]
+            if not fill_td.any():
                 continue
 
-            go_seg = go[s:e + 1, b]  # (T,3)
-            tr_seg = tr[s:e + 1, b]  # (T,3)
-            ang = _root_angle_deg(go_seg)  # (T-1,)
-
-            # rotation absolute jump
-            for t in range(1, T):
-                if ang[t - 1].item() > abs_jump_deg:
-                    abs_t = s + t
-                    go[abs_t, b] = go[abs_t - 1, b]
-                    tr[abs_t, b] = tr[abs_t - 1, b]
-                    if rx is not None:
-                        rx[abs_t, b] = rx[abs_t - 1, b]
-
-            # original jump-return pattern (more sensitive)
-            if T >= 3:
-                ang2 = _root_angle_deg(go[s:e + 1, b])
-                for t in range(1, T - 1):
-                    a_prev = ang2[t - 1].item()
-                    a_next = ang2[t].item()
-                    if (a_prev > hard_thr_deg and a_next < soft_thr_deg) or (a_next > hard_thr_deg and a_prev < soft_thr_deg):
-                        abs_t = s + t
-                        go[abs_t, b] = go[abs_t - 1, b]
-                        tr[abs_t, b] = tr[abs_t - 1, b]
-                        if rx is not None:
-                            rx[abs_t, b] = rx[abs_t - 1, b]
-
-            # translation absolute jump
-            tj = _l2_jump(tr[s:e + 1, b])
-            for t in range(1, T):
-                if tj[t - 1].item() > abs_jump_trans:
-                    abs_t = s + t
-                    go[abs_t, b] = go[abs_t - 1, b]
-                    tr[abs_t, b] = tr[abs_t - 1, b]
-                    if rx is not None:
-                        rx[abs_t, b] = rx[abs_t - 1, b]
-
-            # repr absolute jump
-            if rx is not None:
-                rj = _l2_jump(rx[s:e + 1, b])
-                for t in range(1, T):
-                    if rj[t - 1].item() > abs_jump_repr:
-                        abs_t = s + t
-                        go[abs_t, b] = go[abs_t - 1, b]
-                        tr[abs_t, b] = tr[abs_t - 1, b]
-                        rx[abs_t, b] = rx[abs_t - 1, b]
-
-        # ===== 2) ULTRA SMOOTH =====
-        for s, e in segments:
-            T = e - s + 1
-            if T < smooth_min_len:
+            # anchors: valid and not needing fill
+            anchor = v_n & (~fill_td)
+            if anchor.sum() < 2:
                 continue
 
-            # rotations: overkill rotation smoothing
-            go[s:e + 1, b] = smooth_axis_angle_ultra_overkill(go[s:e + 1, b])
+            anchor_idx = idx[anchor]
+            for t in idx[fill_td].tolist():
+                prev = anchor_idx[anchor_idx < t]
+                nxt = anchor_idx[anchor_idx > t]
+                if prev.numel() == 0 or nxt.numel() == 0:
+                    continue
+                t0 = int(prev[-1].item())
+                t1 = int(nxt[0].item())
+                if (t1 - t0) > max_gap:
+                    continue
+                v0 = out[t0, n, d]
+                v1 = out[t1, n, d]
+                a = (t - t0) / max(1, (t1 - t0))
+                out[t, n, d] = (1 - a) * v0 + a * v1
 
-            # translations: huge gaussian + EMA crush
-            tr_seg = tr[s:e + 1, b]
-            tr_sm = smooth_with_gaussian_conv_ultra(tr_seg, sigma=6.0, passes=4)
-            tr_sm = smooth_with_ema_ultra(tr_sm, alpha=0.90, passes=2)
-            tr[s:e + 1, b] = tr_sm
-
-            # repr: huge gaussian + EMA crush
-            if rx is not None:
-                rx_seg = rx[s:e + 1, b]
-                rx_sm = smooth_with_gaussian_conv_ultra(rx_seg, sigma=6.0, passes=4)
-                rx_sm = smooth_with_ema_ultra(rx_sm, alpha=0.90, passes=2)
-                rx[s:e + 1, b] = rx_sm
-
-    out = dict(params)
-    out["global_rot"] = go.view(LB, 3)
-    out["pred_cam_t"] = tr.view(LB, 3)
-    if rx is not None:
-        out["repr"] = rx.view(LB, -1)
     return out
 
 
-# ============================================================
-# Minimal call example (optional)
-# ============================================================
-if __name__ == "__main__":
-    L, B = 60, 4
-    LB = L * B
-    params = {
-        "global_rot": torch.zeros(LB, 3),
-        "pred_cam_t": torch.zeros(LB, 3),
-        "repr": torch.randn(LB, 133) * 0.01,
-        "mask": torch.ones(LB, dtype=torch.bool),
-    }
+# -----------------------------
+# gaussian helpers
+# -----------------------------
+def _gaussian_kernel1d(sigma: float, radius: int, device, dtype) -> torch.Tensor:
+    xs = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+    k = torch.exp(-0.5 * (xs / max(sigma, 1e-6)) ** 2)
+    return k / (k.sum() + 1e-12)
 
-    out = postprocess_human_params(params, batch_size=B)
-    print(out["global_rot"].shape, out["pred_cam_t"].shape, out["repr"].shape)
+
+# -----------------------------
+# velocity-domain gaussian smoothing (continuous / reduce staccato)
+# -----------------------------
+def _velocity_gaussian(
+    x: torch.Tensor,          # (T,N,D) (assumed finite)
+    sigma: float,
+    passes: int = 1,
+) -> torch.Tensor:
+    """
+    Smooth in velocity domain:
+      v[t] = x[t]-x[t-1]
+      v_s = Gaussian(v)
+      x'[t] = x[0] + cumsum(v_s)
+    """
+    T, N, D = x.shape
+    if T < 3 or sigma <= 0:
+        return x
+
+    radius = int(math.ceil(3 * sigma))
+    k = _gaussian_kernel1d(sigma, radius, x.device, x.dtype)
+    K = k.numel()
+
+    y = x.permute(1, 2, 0).contiguous().view(N * D, 1, T)
+
+    for _ in range(max(1, passes)):
+        v = y[:, :, 1:] - y[:, :, :-1]  # (ND,1,T-1)
+        v_pad = F.pad(v, (radius, radius), mode="reflect")
+        v_s = F.conv1d(v_pad, k.view(1, 1, K))
+        y2 = y.clone()
+        y2[:, :, 1:] = y2[:, :, :1] + torch.cumsum(v_s, dim=-1)
+        y = y2
+
+    out = y.view(N, D, T).permute(2, 0, 1).contiguous()
+    return out
+
+
+def _pos_gaussian(
+    x: torch.Tensor,      # (T,N,D) (assumed finite)
+    sigma: float,
+    passes: int = 1,
+) -> torch.Tensor:
+    T, N, D = x.shape
+    if T < 3 or sigma <= 0:
+        return x
+    radius = int(math.ceil(3 * sigma))
+    k = _gaussian_kernel1d(sigma, radius, x.device, x.dtype)
+    K = k.numel()
+
+    y = x.permute(1, 2, 0).contiguous().view(N * D, 1, T)
+    for _ in range(max(1, passes)):
+        y_pad = F.pad(y, (radius, radius), mode="reflect")
+        y = F.conv1d(y_pad, k.view(1, 1, K))
+    out = y.view(N, D, T).permute(2, 0, 1).contiguous()
+    return out
+
+
+# -----------------------------
+# strong constraint for 3D Euler groups (quat spike -> slerp inpaint -> quat EMA)
+# -----------------------------
+def _quat_slerp(q0: torch.Tensor, q1: torch.Tensor, t: float) -> torch.Tensor:
+    dot = (q0 * q1).sum(dim=-1, keepdim=True)
+    q1 = torch.where(dot < 0, -q1, q1)
+    dot = dot.abs().clamp(max=0.999999)
+    omega = torch.acos(dot)
+    so = torch.sin(omega).clamp(min=1e-8)
+    s0 = torch.sin((1 - t) * omega) / so
+    s1 = torch.sin(t * omega) / so
+    return s0 * q0 + s1 * q1
+
+
+def _ema_smooth_quat(
+    q: torch.Tensor,        # (T,N,4)
+    vis: torch.Tensor,      # (T,N) -- only update on visible frames
+    alpha: float = 0.88,
+    passes: int = 5,
+) -> torch.Tensor:
+    T, N, _ = q.shape
+    if T < 2:
+        return q
+    out = q.clone()
+
+    def _forward(inp: torch.Tensor) -> torch.Tensor:
+        y = inp.clone()
+        for n in range(N):
+            first = None
+            for t in range(T):
+                if vis[t, n]:
+                    first = t
+                    break
+            if first is None:
+                continue
+            for t in range(first + 1, T):
+                if not vis[t, n]:
+                    continue
+                y[t, n] = _quat_slerp(y[t - 1, n], y[t, n], 1 - alpha)
+        return y
+
+    for _ in range(max(1, passes)):
+        out = _forward(out)
+        out = torch.flip(_forward(torch.flip(out, dims=[0])), dims=[0])
+
+    out = out / out.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+    return out
+
+
+def _euler_group_fix_and_smooth(
+    x: torch.Tensor,                    # (T,N,133) Euler scalars (radians)
+    vis: torch.Tensor,                  # (T,N)
+    groups: List[Tuple[int, int, int]],
+    order: str = "XZY",
+    spike_w: int = 9,
+    ratio_thr: float = 2.2,
+    abs_thr_deg: float = 6.0,
+    expand: int = 4,
+    ema_alpha: float = 0.88,
+    ema_passes: int = 5,
+    missing_max_gap: int = 96,
+) -> torch.Tensor:
+    """
+    For each group (a,b,c): treat as 3D Euler triplet:
+      - convert to quat
+      - detect spikes on quat (angle to robust pred)
+      - treat (spike OR missing) as "need repair" (gap-limited)
+      - slerp inpaint
+      - EMA smooth in quat space
+      - back to euler
+    """
+    T, N, D = x.shape
+    if T < 3:
+        return x
+
+    out = x.clone()
+    out_safe = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+    for (a, b, c) in groups:
+        if not (0 <= a < D and 0 <= b < D and 0 <= c < D):
+            continue
+
+        e = out_safe[:, :, [a, b, c]]  # (T,N,3)
+        R = roma.euler_to_rotmat(order, e.reshape(-1, 3)).view(T, N, 3, 3)
+        q = roma.rotmat_to_unitquat(R.reshape(-1, 3, 3)).view(T, N, 4)
+
+        # spike detect on quat (angle to robust pred)
+        W = spike_w + (spike_w % 2 == 0)
+        W = max(W, 3)
+        pad = W // 2
+        q_pad = torch.cat([q[:1].repeat(pad, 1, 1), q, q[-1:].repeat(pad, 1, 1)], dim=0)
+
+        abs_thr = abs_thr_deg * (math.pi / 180.0)
+        bad = torch.zeros((T, N), dtype=torch.bool, device=x.device)
+
+        for t in range(T):
+            if not vis[t].any():
+                continue
+            wq = q_pad[t : t + W]  # (W,N,4)
+            pred = _robust_pred_excluding_center(wq)
+            pred = pred / pred.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            cur = q[t]
+
+            dot = (cur * pred).sum(dim=-1).abs().clamp(max=0.999999)
+            ang = 2.0 * torch.acos(dot)
+
+            neigh = torch.cat([wq[:pad], wq[pad + 1 :]], dim=0)
+            neigh = neigh / neigh.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            dotn = (neigh * pred.unsqueeze(0)).sum(dim=-1).abs().clamp(max=0.999999)
+            angn = 2.0 * torch.acos(dotn)
+            scale = angn.median(dim=0).values.clamp(min=1e-6)
+            ratio = ang / scale
+
+            bad[t] = (ratio > ratio_thr) & (ang > abs_thr) & vis[t]
+
+        if expand > 0:
+            s = bad.permute(1, 0).float().unsqueeze(1)  # (N,1,T)
+            k = 2 * expand + 1
+            s = F.max_pool1d(s, kernel_size=k, stride=1, padding=expand)
+            bad = (s.squeeze(1) > 0).permute(1, 0).contiguous()
+
+        # inpaint by slerp between nearest good frames (also covers missing)
+        q2 = q.clone()
+        idx = torch.arange(T, device=x.device)
+
+        for n in range(N):
+            v_n = vis[:, n]
+            if v_n.sum() < 2:
+                continue
+
+            # need repair on spikes OR missing frames
+            need = bad[:, n] | (~v_n)
+
+            # anchors: visible AND not need
+            anchor = v_n & (~need)
+            if anchor.sum() < 2:
+                continue
+            anchor_idx = idx[anchor]
+
+            for t in idx[need].tolist():
+                prev = anchor_idx[anchor_idx < t]
+                nxt = anchor_idx[anchor_idx > t]
+                if prev.numel() == 0 or nxt.numel() == 0:
+                    continue
+                t0 = int(prev[-1].item())
+                t1 = int(nxt[0].item())
+                if (t1 - t0) > missing_max_gap:
+                    continue
+                tt = (t - t0) / max(1, (t1 - t0))
+                q2[t, n] = _quat_slerp(q2[t0, n], q2[t1, n], float(tt))
+
+        q2 = _ema_smooth_quat(q2, vis, alpha=ema_alpha, passes=ema_passes)
+
+        R2 = roma.unitquat_to_rotmat(q2.reshape(-1, 4)).view(T, N, 3, 3)
+        e2 = roma.rotmat_to_euler(order, R2.reshape(-1, 3, 3)).view(T, N, 3)
+
+        out[:, :, [a, b, c]] = e2
+
+    # keep invisible frames as original (don’t invent)
+    out = torch.where(vis.unsqueeze(-1), out, x)
+    return out
+
+
+# -----------------------------
+# index-free "extra strong topK dims" smoothing
+# -----------------------------
+def _extra_strong_topk_dims(
+    x_filled: torch.Tensor,     # (T,N,D) finite
+    vis: torch.Tensor,          # (T,N)
+    topk: int = 24,
+    sigma: float = 6.5,
+    passes: int = 2,
+) -> torch.Tensor:
+    """
+    Pick topK jittery dims (median velocity magnitude) and apply stronger velocity smoothing.
+    This often stabilizes elbows/knees/etc without knowing indices.
+    """
+    T, N, D = x_filled.shape
+    if T < 3 or topk <= 0 or D <= 0:
+        return x_filled
+
+    # velocity and mask where consecutive frames visible
+    v = (x_filled[1:] - x_filled[:-1]).abs()  # (T-1,N,D)
+    vm = (vis[1:] & vis[:-1]).unsqueeze(-1)   # (T-1,N,1)
+    v = v * vm
+
+    # robust jitter score per dim (avg over persons)
+    score = v.float().median(dim=0).values.mean(dim=0)  # (D,)
+    k = min(int(topk), D)
+    idx = torch.topk(score, k=k, largest=True).indices
+
+    out = x_filled.clone()
+    sel = out[:, :, idx]  # (T,N,k)
+    sel = _velocity_gaussian(sel, sigma=float(sigma), passes=int(passes))
+    out[:, :, idx] = sel
+    return out
+
+
+# -----------------------------
+# main API
+# -----------------------------
+@torch.no_grad()
+def postprocess_human_params(
+    params: Dict[str, torch.Tensor],
+    batch_size: int,
+    order: str = "auto",
+
+    # ---- spike detect ----
+    spike_w: int = 8,
+    spike_topk: int = 8,                # kept for compatibility; not used here as "topk dims"
+    spike_ratio_thr: float = 3.2,
+    spike_abs_thr_deg: float = 14.0,
+    spike_expand: int = 2,
+
+    # ---- spike/missing repair ----
+    pred_w: int = 12,                   # kept for compatibility; we use missing_max_gap instead
+    missing_max_gap: int = 96,
+
+    # ---- smoothing (continuous) ----
+    base_sigma: float = 3.0,
+    smooth_passes: int = 3,
+
+    # ---- optional final pos gaussian ----
+    enable_pos_gaussian: bool = True,
+    pos_sigma: float = 1.0,
+    pos_passes: int = 1,
+
+    # ---- strong constraint groups (recommended) ----
+    enable_strong_groups: bool = True,
+    strong_groups_body133: Optional[List[Tuple[int, int, int]]] = None,
+    strong_spike_w: int = 11,
+    strong_ratio_thr: float = 2.0,
+    strong_abs_thr_deg: float = 5.0,
+    strong_expand: int = 6,
+    strong_ema_alpha: float = 0.92,
+    strong_ema_passes: int = 7,
+
+    # ---- backward compat aliases ----
+    enable_strong_fix: Optional[bool] = None,          # alias -> enable_strong_groups
+    enable_wrist_fix: Optional[bool] = None,           # alias -> enable_strong_groups (only when D==133)
+    wrist_groups_body133: Optional[List[Tuple[int, int, int]]] = None,
+    wrist_spike_w: Optional[int] = None,
+    wrist_ratio_thr: Optional[float] = None,
+    wrist_abs_thr_deg: Optional[float] = None,
+    wrist_expand: Optional[int] = None,
+    wrist_ema_alpha: Optional[float] = None,
+    wrist_ema_passes: Optional[int] = None,
+
+    # ---- index-free extra strong dims (helps elbow a lot) ----
+    enable_extra_strong_topk: bool = True,
+    extra_strong_topk: int = 24,
+    extra_strong_sigma: float = 6.5,
+    extra_strong_passes: int = 2,
+) -> Dict[str, torch.Tensor]:
+    """
+    params:
+      - "repr": (L,D) may contain all-NaN rows for missing frames
+      - "mask": (L,) bool optional. If missing, we infer from finiteness.
+
+    Output:
+      - "repr": (L,D) smoothed (missing frames stay as original NaNs)
+      - "mask": (L,) final valid mask (user mask & finite-row)
+    """
+    assert "repr" in params and params["repr"] is not None
+    x = params["repr"]
+    assert x.dim() == 2, f"repr should be (L,D), got {tuple(x.shape)}"
+    device = x.device
+    L, D = x.shape
+
+    # alias handling
+    if enable_strong_fix is not None:
+        enable_strong_groups = bool(enable_strong_fix)
+
+    # user mask
+    if ("mask" in params) and (params["mask"] is not None):
+        mask = params["mask"].to(device=device, dtype=torch.bool)
+    else:
+        mask = torch.ones((L,), device=device, dtype=torch.bool)
+
+    # crucial: NaN rows => invalid (missing)
+    mask = mask & _finite_row_mask(x)
+
+    N = int(batch_size)
+    if L == 0 or N <= 0 or (L % N != 0):
+        return {"repr": x, "mask": mask}
+
+    x_tnd = _to_tnd(x, N)         # (T,N,D) may have NaNs
+    vis_tn = _to_tn(mask, N)      # (T,N)
+    T = x_tnd.shape[0]
+
+    # quick exits (avoid T-1==0 stats crash)
+    if T < 2 or vis_tn.sum().item() < 2:
+        return {"repr": x, "mask": mask}
+
+    order_use = "XZY" if order == "auto" else order
+
+    # make a safe working copy (finite) for all computations
+    x_safe = torch.nan_to_num(x_tnd, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # ---- strong constraint for D==133 (wrist / elbow groups etc) ----
+    # support wrist_* alias (only for body_pose)
+    if D == 133:
+        if enable_wrist_fix is not None:
+            enable_strong_groups = bool(enable_wrist_fix)
+        if wrist_groups_body133 is not None:
+            strong_groups_body133 = wrist_groups_body133
+        if wrist_spike_w is not None:
+            strong_spike_w = int(wrist_spike_w)
+        if wrist_ratio_thr is not None:
+            strong_ratio_thr = float(wrist_ratio_thr)
+        if wrist_abs_thr_deg is not None:
+            strong_abs_thr_deg = float(wrist_abs_thr_deg)
+        if wrist_expand is not None:
+            strong_expand = int(wrist_expand)
+        if wrist_ema_alpha is not None:
+            strong_ema_alpha = float(wrist_ema_alpha)
+        if wrist_ema_passes is not None:
+            strong_ema_passes = int(wrist_ema_passes)
+
+    if enable_strong_groups and (D == 133):
+        if strong_groups_body133 is None:
+            # default: wrists only (you验证过可行)
+            strong_groups_body133 = [(31, 32, 33), (41, 42, 43)]
+
+        x_safe = _euler_group_fix_and_smooth(
+            x_safe,
+            vis_tn,
+            groups=strong_groups_body133,
+            order=order_use,
+            spike_w=strong_spike_w,
+            ratio_thr=strong_ratio_thr,
+            abs_thr_deg=strong_abs_thr_deg,
+            expand=strong_expand,
+            ema_alpha=strong_ema_alpha,
+            ema_passes=strong_ema_passes,
+            missing_max_gap=missing_max_gap,
+        )
+        # x_safe is still finite
+
+    # ---- spike detect (scalar) on x_safe, gated by vis ----
+    spike_mask = _detect_spikes_scalar(
+        x_safe, vis_tn,
+        spike_w=spike_w,
+        ratio_thr=spike_ratio_thr,
+        abs_thr_deg=spike_abs_thr_deg,
+        expand=spike_expand,
+    )
+
+    # ---- inpaint (internal) ----
+    # Fill BOTH spikes and missing frames to allow continuous smoothing,
+    # but later we will restore missing frames to original NaNs.
+    need_fill = spike_mask | (~vis_tn.unsqueeze(-1))  # (T,N,D)
+
+    # anchors are frames that are visible and not need_fill
+    x_filled = _inpaint_scalar_linear(
+        x_safe,
+        need_fill=need_fill,
+        valid=vis_tn,
+        max_gap=missing_max_gap,
+    )
+
+    # ---- main continuous smoothing (velocity gaussian) ----
+    x_s = _velocity_gaussian(x_filled, sigma=float(base_sigma), passes=int(smooth_passes))
+
+    # ---- extra-strong topK jittery dims (index-free; usually stabilizes elbow) ----
+    if enable_extra_strong_topk and extra_strong_topk > 0:
+        x_s = _extra_strong_topk_dims(
+            x_s,
+            vis=vis_tn,
+            topk=int(extra_strong_topk),
+            sigma=float(extra_strong_sigma),
+            passes=int(extra_strong_passes),
+        )
+
+    # ---- optional tiny pos gaussian to shave micro-steps ----
+    if enable_pos_gaussian and pos_sigma > 0:
+        x_s = _pos_gaussian(x_s, sigma=float(pos_sigma), passes=int(pos_passes))
+
+    # restore missing frames to original (NaN rows stay NaN)
+    x_out_tnd = torch.where(vis_tn.unsqueeze(-1), x_s, x_tnd)
+
+    y = _from_tnd(x_out_tnd)
+    return {"repr": y, "mask": mask}
+
+
+# ======================================================================================
+# Example CALL (copy-paste) — body_pose + hand
+# ======================================================================================
+def example_call(pose_output: Dict[str, Dict[str, torch.Tensor]]) -> None:
+    # -------------------------
+    # body_pose: (L,133)
+    # -------------------------
+    if ("mhr" in pose_output) and ("body_pose" in pose_output["mhr"]) and (pose_output["mhr"]["body_pose"] is not None):
+        body_pose = pose_output["mhr"]["body_pose"]
+
+        params = {
+            "repr": body_pose,  # may contain all-NaN rows for missing frames
+            # OPTIONAL: if you already have valid mask, pass it; otherwise omit it.
+            # "mask": your_mask_bool_L,
+        }
+
+        out = postprocess_human_params(
+            params,
+            batch_size=1,  # 单人
+            order="auto",
+
+            # spike detect（身体别太敏感）
+            spike_w=8,
+            spike_ratio_thr=3.2,
+            spike_abs_thr_deg=14.0,
+            spike_expand=2,
+
+            # gap-limited fill for missing/spikes (internal only)
+            missing_max_gap=96,
+
+            # 连续平滑（核心：velocity gaussian）
+            base_sigma=3.0,
+            smooth_passes=3,
+
+            # 肘未知时：这招通常最有效（把最抖的 topK 维度二次加重平滑）
+            enable_extra_strong_topk=True,
+            extra_strong_topk=24,
+            extra_strong_sigma=6.5,
+            extra_strong_passes=2,
+
+            # 强约束组：默认只锁 wrist；如果你以后知道肘 index，就加进去
+            enable_strong_groups=True,
+            strong_groups_body133=[(31, 32, 33), (41, 42, 43)],
+
+            # 最后一点点 position gaussian 抹掉“细小台阶”
+            enable_pos_gaussian=True,
+            pos_sigma=1.0,
+            pos_passes=1,
+        )
+        pose_output["mhr"]["body_pose"] = out["repr"]
+
+    # -------------------------
+    # hand: (L,108)
+    # -------------------------
+    if ("mhr" in pose_output) and ("hand" in pose_output["mhr"]) and (pose_output["mhr"]["hand"] is not None):
+        hand = pose_output["mhr"]["hand"]
+        params_h = {
+            "repr": hand,  # may contain all-NaN rows too
+            # "mask": your_mask_bool_L,
+        }
+
+        out_h = postprocess_human_params(
+            params_h,
+            batch_size=1,
+            order="auto",
+
+            # spike detect（手更敏感）
+            spike_w=10,
+            spike_ratio_thr=2.0,
+            spike_abs_thr_deg=6.0,
+            spike_expand=4,
+
+            missing_max_gap=96,
+
+            # 连续平滑更强
+            base_sigma=3.6,
+            smooth_passes=4,
+
+            enable_extra_strong_topk=True,
+            extra_strong_topk=24,
+            extra_strong_sigma=7.0,
+            extra_strong_passes=2,
+
+            # hand 不是 133，这里强约束组不会触发（安全）
+            enable_strong_groups=True,
+
+            enable_pos_gaussian=True,
+            pos_sigma=1.2,
+            pos_passes=1,
+        )
+        pose_output["mhr"]["hand"] = out_h["repr"]

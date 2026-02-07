@@ -526,7 +526,7 @@ def on_mask_generation(video_path: str):
         msk = np.zeros_like(img[:, :, 0])
         for out_obj_id, out_mask in video_segments[out_frame_idx].items():
             mask = (out_mask[0] > 0).astype(np.uint8) * 255
-            img = mask_painter(img, mask, mask_color=4 + out_obj_id)
+            # img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             msk[mask == 255] = out_obj_id
         img_to_video.append(img)
 
@@ -535,7 +535,7 @@ def on_mask_generation(video_path: str):
         img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx:08d}.jpg"))
         msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx:08d}.png"))
         mask = (out_mask[0] == 0).astype(np.uint8) * 255
-        img = mask_painter(img, mask, mask_color=1, mask_alpha=0.5)
+        img = mask_painter(img, mask, mask_color=0, mask_alpha=0.8, contour_width=17)
         img_vis = Image.fromarray(img).convert('P')
         img_vis.save(os.path.join(MASKS_PATH_VIS, f"{out_frame_idx:08d}.png"))
 
@@ -604,7 +604,7 @@ def mask_completion_and_iou_init(pred_amodal_masks, pred_res, obj_id, batch_mask
     ious = []
     masks_margin_shrink = [bm.copy() for bm in masks]
     mask_H, mask_W = masks_margin_shrink[0].shape
-    occlusion_threshold = 0.55
+    occlusion_threshold = 0.9
     for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
         # mute objects near margin
         zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
@@ -694,7 +694,7 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     ious = []
     masks_margin_shrink = [bm.copy() for bm in masks]
     mask_H, mask_W = masks_margin_shrink[0].shape
-    occlusion_threshold = 0.65
+    occlusion_threshold = 0.9
     for bi, (a, b) in enumerate(zip(masks, pred_amodal_masks)):
         # mute objects near margin
         zero_mask_cp = np.zeros_like(masks_margin_shrink[bi])
@@ -995,18 +995,22 @@ def on_4d_generation(video_path: str):
                 mask_output = mask_outputs[frame_id-num_empth_ids]
                 id_current = id_batch[frame_id-num_empth_ids]
             img = cv2.imread(image_path)
-            rend_img = visualize_sample_together(img, mask_output, sam3_3d_body_model.faces, id_current)
+            try:
+                rend_img = visualize_sample_together(img, mask_output, sam3_3d_body_model.faces, id_current)
+            except:
+                img_mesh = img.copy()
+                rend_img = np.ones_like(img_mesh) * 255
             cv2.imwrite(
                 f"{OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
                 rend_img.astype(np.uint8),
             )
             # save rendered frames for individual person
-            rend_img_list = visualize_sample(img, mask_output, sam3_3d_body_model.faces, id_current)
-            for ri, rend_img in enumerate(rend_img_list):
-                cv2.imwrite(
-                    f"{OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
-                    rend_img.astype(np.uint8),
-                )
+            # rend_img_list = visualize_sample(img, mask_output, sam3_3d_body_model.faces, id_current)
+            # for ri, rend_img in enumerate(rend_img_list):
+            #     cv2.imwrite(
+            #         f"{OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+            #         rend_img.astype(np.uint8),
+            #     )
             # save mesh for individual person
             save_mesh_results(
                 outputs=mask_output, 

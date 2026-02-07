@@ -378,13 +378,14 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     
     return iou_dict_obj_id, occ_dict_obj_id, final_pred_amodal_masks_com
 
-def propagate_in_video(predictor, session_id):
+def propagate_in_video(predictor, session_id, max_num_objects):
     # we will just propagate from frame 0 to the end of the video
     outputs_per_frame = {}
     for response in predictor.handle_stream_request(
         request=dict(
             type="propagate_in_video",
             session_id=session_id,
+            max_num_objects=max_num_objects,
         )
     ):
         outputs_per_frame[response["frame_index"]] = response["outputs"]
@@ -417,60 +418,44 @@ class OfflineApp:
         self.RUNTIME['bboxes'] = None
         self.RUNTIME['session_id'] = None
 
-    def on_mask_generation(self, video_path: str=None, start_frame_idx: int = 0, max_frame_num_to_track: int = 1800):
+    def save_masks(self, 
+        start_frame_idx,
+        outputs_per_frame, 
+        obj_dict, 
+        resized_batch_frames,
+        original_size,
+    ):
         """
         Mask generation across the video.
         Currently runs SAM-3 propagation and renders a mask video.
         """
-        print("[DEBUG] Mask Generation button clicked.")
-
-        # run propagation throughout the video and collect the results in a dict
-        video_segments = {}  # video_segments contains the per-frame segmentation results
-        outputs_per_frame = propagate_in_video(self.predictor.predictor, self.predictor.session_id)
-        for frame_idx, obj_ids, low_res_masks, video_res_masks, obj_scores, iou_scores in self.predictor.propagate_in_video(
-            self.RUNTIME['inference_state'],
-            start_frame_idx=0,
-            max_frame_num_to_track=max_frame_num_to_track,
-            reverse=False,
-            propagate_preflight=True,
-        ):
-            video_segments[frame_idx] = {
-                out_obj_id: (video_res_masks[i] > 0.0).cpu().numpy()
-                for i, out_obj_id in enumerate(self.RUNTIME['out_obj_ids'])
-            } 
-
-        # render the segmentation results every few frames
-        vis_frame_stride = 1
-        out_h = self.RUNTIME['inference_state']['video_height']
-        out_w = self.RUNTIME['inference_state']['video_width']
-
+        # print("[DEBUG] Save Masks.")
+        out_w = original_size[0]
+        out_h = original_size[1]
         MASKS_PATH = os.path.join(self.OUTPUT_DIR, 'masks')  # for sam3-3d-body
         os.makedirs(MASKS_PATH, exist_ok=True)
+        IMAGE_PATH = os.path.join(self.OUTPUT_DIR, 'painted_images') # for sam3-3d-body
+        os.makedirs(IMAGE_PATH, exist_ok=True)
 
-        for out_frame_idx in range(0, len(video_segments), vis_frame_stride):
-            img = self.RUNTIME['inference_state']['images'][out_frame_idx].detach().float().cpu()
-            img = (img + 1) / 2
-            img = img.clamp(0, 1)
-            img = F.interpolate(
-                img.unsqueeze(0),
-                size=(out_h, out_w),
-                mode="bilinear",
-                align_corners=False,
-            ).squeeze(0)
-            img = img.permute(1, 2, 0)
-            img = (img.numpy() * 255).astype("uint8")
-            # img_pil = Image.fromarray(img).convert('RGB')
+        for out_frame_idx, resized_frame in enumerate(resized_batch_frames):
+            output = outputs_per_frame.get(out_frame_idx, None)
+            img = np.array(resized_frame).astype("uint8")
             msk = np.zeros_like(img[:, :, 0])
-            for out_obj_id, out_mask in video_segments[out_frame_idx].items():
-                mask = (out_mask[0] > 0).astype(np.uint8) * 255
-                # img = mask_painter(img, mask, mask_color=4 + out_obj_id)
-                msk[mask == 255] = out_obj_id
-            # img_to_video.append(img)
-
-            msk_pil = Image.fromarray(msk).convert('P')
+            if output is not None:
+                for out_obj_id, sam_obj_id in obj_dict.items():
+                    # which mask belongs to out_obj_id
+                    idx = np.where(output['out_obj_ids'] == sam_obj_id)[0]
+                    if len(idx) == 0:
+                        continue
+                    msk[output['out_binary_masks'][idx][0].astype(np.uint8) > 0] = out_obj_id
+                    mask = output['out_binary_masks'][idx][0].astype(np.uint8) * 255
+                    img = mask_painter(img, mask, mask_color=4 + out_obj_id)
+            
+            msk_pil = cv2.resize(msk, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
+            msk_pil = Image.fromarray(msk_pil).convert('P')
             msk_pil.putpalette(DAVIS_PALETTE)
-            # img_pil.save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
             msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
+            Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
 
     def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None):
         """
@@ -809,3 +794,45 @@ if __name__ == "__main__":
         )
 
     inference(args)
+
+
+from typing import List
+def resize_images_longest_side(
+    images: List[Image.Image],
+    max_side: int = 1280
+) -> List[Image.Image]:
+    resized = []
+    for img in images:
+        w, h = img.size
+        scale = max_side / max(w, h)
+        if scale >= 1.0:
+            resized.append(img)
+            continue
+        new_w = int(round(w * scale))
+        new_h = int(round(h * scale))
+        resized.append(
+            img.resize((new_w, new_h), Image.BICUBIC)
+        )
+    return resized
+
+
+import numpy as np
+
+def majority_keypoints_in_mask(keypoints: np.ndarray, mask: np.ndarray) -> bool:
+    """
+    Return True if more than half of valid keypoints lie inside the mask.
+    """
+    H, W = mask.shape
+    pts = keypoints[:, :2]
+
+    x = np.rint(pts[:, 0]).astype(int)  # column (x)
+    y = np.rint(pts[:, 1]).astype(int)  # row (y)
+
+    valid = (x >= 0) & (x < W) & (y >= 0) & (y < H)
+    num_valid = np.sum(valid)
+    if num_valid == 0:
+        return False
+
+    num_inside = np.sum(mask[y[valid], x[valid]])
+    return num_inside > (num_valid / 2)
+

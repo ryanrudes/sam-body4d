@@ -95,6 +95,7 @@ class Sam3VideoPredictor:
                 propagation_direction=request.get("propagation_direction", "both"),
                 start_frame_idx=request.get("start_frame_index", None),
                 max_frame_num_to_track=request.get("max_frame_num_to_track", None),
+                max_num_objects=request.get("max_num_objects", None),
             )
         else:
             raise RuntimeError(f"invalid request type: {request_type}")
@@ -186,12 +187,17 @@ class Sam3VideoPredictor:
         propagation_direction,
         start_frame_idx,
         max_frame_num_to_track,
+        max_num_objects=None,
     ):
         """Propagate the added prompts to get grounding results on all video frames."""
         logger.debug(
             f"propagate in video in session {session_id}: "
             f"{propagation_direction=}, {start_frame_idx=}, {max_frame_num_to_track=}"
         )
+
+        if max_num_objects is not None:
+            self.model.max_num_objects = max_num_objects
+
         try:
             session = self._get_session(session_id)
             inference_state = session["state"]

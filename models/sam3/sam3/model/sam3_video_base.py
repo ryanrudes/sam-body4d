@@ -559,9 +559,9 @@ class Sam3VideoBase(nn.Module):
             new_det_num = len(new_det_fa_inds)
             num_obj_dropped_due_to_limit = 0
             if not is_image_only and prev_obj_num + new_det_num > self.max_num_objects:
-                logger.warning(
-                    f"hitting {self.max_num_objects=} with {new_det_num=} and {prev_obj_num=}"
-                )
+                # logger.warning(
+                #     f"hitting {self.max_num_objects=} with {new_det_num=} and {prev_obj_num=}"
+                # )
                 new_det_num_to_keep = self.max_num_objects - prev_obj_num
                 num_obj_dropped_due_to_limit = new_det_num - new_det_num_to_keep
                 new_det_fa_inds = self._drop_new_det_with_obj_limit(

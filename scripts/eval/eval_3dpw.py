@@ -33,7 +33,6 @@ from eval.eval_utils.smooth_utils.geometry import (
     smooth_with_slerp,
 )
 
-
 def dict_numpy_to_torch(
     x: Dict[str, object],
     *,

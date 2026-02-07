@@ -2,7 +2,7 @@ import os
 import glob
 import cv2
 
-def jpg_folder_to_mp4(folder: str, output_filename: str, fps: int = 25, long_edge: int = 1080):
+def jpg_folder_to_mp4(folder: str, output_filename: str, fps: int = 25, long_edge: int = 1280):
     """
     Convert JPG images in a folder into an MP4 video, sorted by filename.
     Resize images so that the long edge equals `long_edge`.
@@ -62,6 +62,6 @@ def jpg_folder_to_mp4(folder: str, output_filename: str, fps: int = 25, long_edg
 
 
 jpg_folder_to_mp4(
-    "/home/data/hmq/datasets/hmr/sub_3",
-    "example1.mp4"
+    "/home/hmq/projects/sam-3d-objects/output/rendered_frames",
+    "occ-res.mp4"
 )
