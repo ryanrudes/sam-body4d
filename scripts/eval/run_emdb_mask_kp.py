@@ -63,13 +63,6 @@ def inference(args):
             resized_batch_frames = resize_images_longest_side(batch_frames)
             ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
             # initialise and reset predictor state
-            if predictor.RUNTIME['session_id'] is not None:
-                _ = predictor.predictor.handle_request(
-                    request=dict(
-                        type="reset_session",
-                        session_id=predictor.RUNTIME['session_id'],
-                    )
-                )
             response = predictor.predictor.handle_request(
                 request=dict(
                     type="start_session",
@@ -131,6 +124,15 @@ def inference(args):
                 resized_batch_frames=resized_batch_frames,
                 original_size=(width, height),
             )
+        
+        if predictor.RUNTIME['session_id'] is not None:
+            _ = predictor.predictor.handle_request(
+                request=dict(
+                    type="reset_session",
+                    session_id=predictor.RUNTIME['session_id'],
+                )
+            )
+        
         # 4. hmr upon masks
         with torch.autocast("cuda", enabled=False):
             predictor.on_4d_generation(frame_list)
