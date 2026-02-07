@@ -2,13 +2,11 @@ import argparse
 import os, sys, glob
 from tqdm import tqdm
 from PIL import Image
+from pathlib import Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(current_dir))
 
-# from offline_app import inference configs
 from offline_app_mask_kp import *
-
-from eval.eval_utils.emdb.utils import EMDB1_LIST, EMDB1_NAMES
 
 
 def inference(args):
@@ -16,42 +14,34 @@ def inference(args):
     predictor = OfflineApp()
 
     # init data
-    test_seq_root = os.path.join(args.data_dir, 'EMDB_ROOT')
-    test_seq_path_list = [os.path.join(test_seq_root, '/'.join(tn.split('/')[:2])) for tn in EMDB1_LIST]
-    test_seq_path_list.sort()
-    test_seq_name_list = ['_'.join(tn.rstrip('/').split(os.sep)[-2:]) for tn in test_seq_path_list]
-    
-    labels = torch.load(f"{args.data_dir}/hmr4d_support/emdb_vit_v4.pt")
-    batch_size = 1000
+    # Load evaluation protocol from WHAM labels
+    rich_dir = Path(f"{args.data_dir}/hmr4d_support")
+    labels = torch.load(rich_dir / "rich_test_labels.pt", weights_only=False)
+    preproc_data = torch.load(rich_dir / "rich_test_preproc.pt", weights_only=False)
+    vids = list(labels.keys())
+    vids.sort()
 
     # inference
-    for seq, seq_path in tqdm(zip(test_seq_name_list, test_seq_path_list)):
+    for seq in tqdm(vids):
 
-        bbx_xys = labels[seq]['bbx_xys']
-        bboxes = torch.cat(
-            [bbx_xys[:, :2] - bbx_xys[:, 2:3] / 2,
-            bbx_xys[:, :2] + bbx_xys[:, 2:3] / 2],
-            dim=1
-        )
-        kp = labels[seq]['kp2d']
+        seq_id = seq.split('_')[-1]
+        frame_list = labels[seq]['frame_id']
+        frame_list = [f"{args.data_dir}/{seq}/{fi:05d}_{seq_id}.jpeg" for fi in frame_list]
+        frame_list.sort()
+        
+        if not os.path.exists(frame_list[0]):
+        # if True:
+            print(frame_list[0] + " does not exist")
+            frame_file_list = glob.glob(f"{args.data_dir}/{seq}/*.jpeg")
+            frame_file_list.sort()
+            frame_list = [frame_file_list[i-1] for i in labels[seq]['frame_id'].tolist()]
+
+        kp = preproc_data[seq]['kp2d']
 
         # 0. init outputs
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir
         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
-        frame_list = glob.glob(os.path.join(seq_path, 'images', '*.jpg'))
-        frame_list.sort()
-
-        box_list = []
-        kp_list = []
-        for obj_id in range(1):
-            try:
-                box_list.append(bboxes)
-                kp_list.append(kp)
-            except:
-                break
-            # predictor.RUNTIME['bboxes'] = bboxes[seq_name_with_id]['bbx_xyxy']
-        predictor.RUNTIME['bboxes'] = box_list
 
         one_frame = Image.open(frame_list[0]).convert('RGB')
         width, height = one_frame.size
@@ -79,7 +69,6 @@ def inference(args):
             predictor.RUNTIME['session_id'] = response["session_id"]
             predictor.RUNTIME['out_obj_ids'] = [1]
             num_objects = 1
-            ann_frame_idx = i
 
             if i == 0:    
                 prompt_text_str = "person"
@@ -98,7 +87,6 @@ def inference(args):
                     obj_dict = {}   # key: inference_id (start from 1), value: sam_id
                     obj_list = []
                     for obj_id in range(num_objects):
-                        seq_name_with_id = f'{seq}_{obj_id}'
                         kp_obj_id = kp[0].numpy()*ratio # 17 x 3
                         for out_obj_id in out['out_obj_ids']:
                             if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
@@ -131,14 +119,14 @@ def inference(args):
                 resized_batch_frames=resized_batch_frames,
                 original_size=(width, height),
             )
-        # 4. hmr upon masks
+
         with torch.autocast("cuda", enabled=False):
             predictor.on_4d_generation(frame_list)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Inference on EMDB-split-1")
-    parser.add_argument("--data_dir", type=str, default="path to EMDB data",
+    parser = argparse.ArgumentParser(description="Inference on RICH")
+    parser.add_argument("--data_dir", type=str, default="path to RICH data",
         help="Path to the data directory")
     parser.add_argument("--output_dir", type=str, default="path to output",
         help="Path to the output directory")

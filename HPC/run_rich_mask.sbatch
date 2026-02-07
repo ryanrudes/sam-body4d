@@ -3,9 +3,9 @@
 #SBATCH --partition=gpu
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64G
+#SBATCH --mem=82
 #SBATCH --cpus-per-task=16
-#SBATCH --time=0-12:00:00
+#SBATCH --time=0-36:00:00
 #SBATCH --output=/users/ac1mga/data/output/hmr/logs/%x-%j.log
 #SBATCH --error=/users/ac1mga/data/output/hmr/logs/%x-%j.log
 
@@ -22,6 +22,6 @@ conda activate body4d
 cd /users/ac1mga/projects/sam-body4d
 
 # === Inference ===
-CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_3dpw_mask_kp.py \
-    --data_dir /users/ac1mga/data/datasets/hmr/3DPW \
-    --output_dir /users/ac1mga/data/predictions/hmr/3DPW-mask-text
+CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_rich_mask_kp.py \
+    --data_dir /users/ac1mga/data/datasets/hmr/RICH \
+    --output_dir /users/ac1mga/data/predictions/hmr/RICH-mask-text
