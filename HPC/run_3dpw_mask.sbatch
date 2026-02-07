@@ -18,9 +18,8 @@ conda activate body4d
 
 # === Set Workspace ===
 cd /users/ac1mga/projects/hmr/sam-body4d
-export PYTHONPATH=$PWD
 
 # === Inference ===
-PYTHONPATH=. CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_3dpw_mask_kp.py \
+CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_3dpw_mask_kp.py \
     --data_dir /users/ac1mga/data/datasets/hmr/3DPW \
     --output_dir /users/ac1mga/predictions/hmr/3DPW-mask-text

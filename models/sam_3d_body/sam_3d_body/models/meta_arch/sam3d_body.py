@@ -2180,6 +2180,32 @@ class SAM3DBody(BaseModel):
 
 		# Re-run forward
 		with torch.no_grad():
+			verts, j3d, jcoords, mhr_model_params, joint_global_rots = (
+				self.head_pose.mhr_forward(
+					global_trans=pose_output["mhr"]["global_rot"] * 0,
+					global_rot=pose_output["mhr"]["global_rot"],
+					body_pose_params=pose_output["mhr"]["body_pose"],
+					hand_pose_params=pose_output["mhr"]["hand"],
+					scale_params=pose_output["mhr"]["scale"],
+					shape_params=pose_output["mhr"]["shape"],
+					expr_params=pose_output["mhr"]["face"],
+					return_keypoints=True,
+					return_joint_coords=True,
+					return_model_params=True,
+					return_joint_rotations=True,
+				)
+			)
+			j3d = j3d[:, :70]  # 308 --> 70 keypoints
+			verts[..., [1, 2]] *= -1  # Camera system difference
+			j3d[..., [1, 2]] *= -1  # Camera system difference
+			jcoords[..., [1, 2]] *= -1
+			pose_output["mhr"]["pred_keypoints_3d"] = j3d
+			pose_output["mhr"]["pred_vertices"] = verts
+			pose_output["mhr"]["pred_joint_coords"] = jcoords
+			pose_output["mhr"]["pred_pose_raw"][
+				...
+			] = 0  # pred_pose_raw is not valid anymore
+			pose_output["mhr"]["mhr_model_params"] = mhr_model_params
 
 			# # # # smooth before generating mesh parameters
 			# kalman_cfg = {
@@ -2250,94 +2276,92 @@ class SAM3DBody(BaseModel):
 			#   from models.meta_arch.post_process import postprocess_human_params
 			# and pose_output is your dict.
 
-			def _mk_mask_from_nan_rows(x: torch.Tensor) -> torch.Tensor:
-				return torch.isfinite(x).all(dim=-1)
+			# def _mk_mask_from_nan_rows(x: torch.Tensor) -> torch.Tensor:
+			# 	return torch.isfinite(x).all(dim=-1)
 
-			# -------------------------
-			# body_pose: (L,133)
-			# -------------------------
-			if ("mhr" in pose_output) and ("body_pose" in pose_output["mhr"]) and (pose_output["mhr"]["body_pose"] is not None):
-				body_pose = pose_output["mhr"]["body_pose"]
+			# # -------------------------
+			# # body_pose: (L,133)
+			# # -------------------------
+			# if ("mhr" in pose_output) and ("body_pose" in pose_output["mhr"]) and (pose_output["mhr"]["body_pose"] is not None):
+			# 	body_pose = pose_output["mhr"]["body_pose"]
 
-				params = {
-					"repr": body_pose,  # may contain all-NaN rows for missing frames
-					# OPTIONAL: if you already have valid mask, pass it; otherwise omit it.
-					# "mask": your_mask_bool_L,
-				}
+			# 	params = {
+			# 		"repr": body_pose,  # may contain all-NaN rows for missing frames
+			# 		# OPTIONAL: if you already have valid mask, pass it; otherwise omit it.
+			# 		# "mask": your_mask_bool_L,
+			# 	}
 
-				# body_pose: (L,133)
-			out = postprocess_human_params(
-				params,
-				batch_size=1,
-				order="auto",
+			# 	# body_pose: (L,133)
+			# out = postprocess_human_params(
+			# 	params,
+			# 	batch_size=1,
+			# 	order="auto",
 
-				spike_w=8,
-				spike_ratio_thr=3.2,
-				spike_abs_thr_deg=14.0,
-				spike_expand=2,
-				missing_max_gap=96,
+			# 	spike_w=8,
+			# 	spike_ratio_thr=3.2,
+			# 	spike_abs_thr_deg=14.0,
+			# 	spike_expand=2,
+			# 	missing_max_gap=96,
 
-				base_sigma=3.0,
-				smooth_passes=3,
+			# 	base_sigma=3.0,
+			# 	smooth_passes=3,
 
-				enable_extra_strong_topk=True,
-				extra_strong_topk=48,     # ⭐ elbow killer
-				extra_strong_sigma=9.5,
-				extra_strong_passes=5,
+			# 	enable_extra_strong_topk=True,
+			# 	extra_strong_topk=48,     # ⭐ elbow killer
+			# 	extra_strong_sigma=9.5,
+			# 	extra_strong_passes=5,
 
-				enable_strong_groups=True,
-				strong_groups_body133=[(31,32,33),(41,42,43)],
+			# 	enable_strong_groups=True,
+			# 	strong_groups_body133=[(31,32,33),(41,42,43)],
 
-				enable_pos_gaussian=True,
-				pos_sigma=1.0,
-				pos_passes=1,
-			)
-			pose_output["mhr"]["body_pose"] = out["repr"]
+			# 	enable_pos_gaussian=True,
+			# 	pos_sigma=1.0,
+			# 	pos_passes=1,
+			# )
+			# pose_output["mhr"]["body_pose"] = out["repr"]
 
 			
 
-			# -------------------------
-			# hand: (L,108)
-			# -------------------------
-			if ("mhr" in pose_output) and ("hand" in pose_output["mhr"]) and (pose_output["mhr"]["hand"] is not None):
-				hand = pose_output["mhr"]["hand"]
-				params_h = {
-					"repr": hand,  # may contain all-NaN rows too
-					# "mask": your_mask_bool_L,
-				}
+			# # -------------------------
+			# # hand: (L,108)
+			# # -------------------------
+			# if ("mhr" in pose_output) and ("hand" in pose_output["mhr"]) and (pose_output["mhr"]["hand"] is not None):
+			# 	hand = pose_output["mhr"]["hand"]
+			# 	params_h = {
+			# 		"repr": hand,  # may contain all-NaN rows too
+			# 		# "mask": your_mask_bool_L,
+			# 	}
 
-				out_h = postprocess_human_params(
-					params_h,
-					batch_size=1,
-					order="auto",
+			# 	out_h = postprocess_human_params(
+			# 		params_h,
+			# 		batch_size=1,
+			# 		order="auto",
 
-					# spike detect（手更敏感）
-					spike_w=10,
-					spike_ratio_thr=2.0,
-					spike_abs_thr_deg=6.0,
-					spike_expand=4,
+			# 		# spike detect（手更敏感）
+			# 		spike_w=10,
+			# 		spike_ratio_thr=2.0,
+			# 		spike_abs_thr_deg=6.0,
+			# 		spike_expand=4,
 
-					missing_max_gap=96,
+			# 		missing_max_gap=96,
 
-					# 连续平滑更强
-					base_sigma=3.6,
-					smooth_passes=4,
+			# 		# 连续平滑更强
+			# 		base_sigma=3.6,
+			# 		smooth_passes=4,
 
-					enable_extra_strong_topk=True,
-					extra_strong_topk=24,
-					extra_strong_sigma=7.0,
-					extra_strong_passes=2,
+			# 		enable_extra_strong_topk=True,
+			# 		extra_strong_topk=24,
+			# 		extra_strong_sigma=7.0,
+			# 		extra_strong_passes=2,
 
-					# hand 不是 133，这里强约束组不会触发（安全）
-					enable_strong_groups=True,
+			# 		# hand 不是 133，这里强约束组不会触发（安全）
+			# 		enable_strong_groups=True,
 
-					enable_pos_gaussian=True,
-					pos_sigma=1.2,
-					pos_passes=1,
-				)
-				pose_output["mhr"]["hand"] = out_h["repr"]
-
-
+			# 		enable_pos_gaussian=True,
+			# 		pos_sigma=1.2,
+			# 		pos_passes=1,
+			# 	)
+			# 	pose_output["mhr"]["hand"] = out_h["repr"]
 
 		########################################################
 		# Project to 2D

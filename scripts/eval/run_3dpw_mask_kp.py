@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(current_dir))
 
 # from offline_app import inference configs
 from offline_app_mask_kp import *
-from eval.eval_utils.kp_in_mask import majority_keypoints_in_mask
+# from eval.eval_utils.kp_in_mask import majority_keypoints_in_mask
 
 
 def inference(args):
