@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=82G
 #SBATCH --cpus-per-task=16
-#SBATCH --time=0-12:00:00
+#SBATCH --time=0-16:00:00
 #SBATCH --output=/users/ac1mga/data/output/hmr/logs/%x-%j.log
 #SBATCH --error=/users/ac1mga/data/output/hmr/logs/%x-%j.log
 
