@@ -3,8 +3,8 @@
 #SBATCH --partition=gpu
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --mem=82G
-#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
 #SBATCH --time=0-36:00:00
 #SBATCH --output=/users/ac1mga/data/output/hmr/logs/%x-%j.log
 #SBATCH --error=/users/ac1mga/data/output/hmr/logs/%x-%j.log
