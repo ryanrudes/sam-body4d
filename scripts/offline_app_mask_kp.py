@@ -449,13 +449,13 @@ class OfflineApp:
                         continue
                     msk[output['out_binary_masks'][idx][0].astype(np.uint8) > 0] = out_obj_id
                     mask = output['out_binary_masks'][idx][0].astype(np.uint8) * 255
-                    # img = mask_painter(img, mask, mask_color=4 + out_obj_id)
+                    img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             
             msk_pil = cv2.resize(msk, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
             msk_pil = Image.fromarray(msk_pil).convert('P')
             msk_pil.putpalette(DAVIS_PALETTE)
             msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
-            # Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
+            Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
 
     def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None):
         """
@@ -678,12 +678,12 @@ class OfflineApp:
                 else:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
-                # img = cv2.imread(image_path)
-                # rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                # cv2.imwrite(
-                #     f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                #     rend_img.astype(np.uint8),
-                # )
+                img = cv2.imread(image_path)
+                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                cv2.imwrite(
+                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                    rend_img.astype(np.uint8),
+                )
 
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)

@@ -137,7 +137,7 @@ if __name__ == "__main__":
                     if isinstance(vv, torch.Tensor):
                         v[kk] = vv.cuda()
 
-        # if 'downtown_cafe' not in seq_name or obj_id != '0':
+        # if 'downtown_cafe' not in seq_name or obj_id != '1':
         #     continue
 
         # for seq in tqdm(seq_list):
