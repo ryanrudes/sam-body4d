@@ -57,13 +57,6 @@ def inference(args):
             resized_batch_frames = resize_images_longest_side(batch_frames)
             ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
             # initialise and reset predictor state
-            if predictor.RUNTIME['session_id'] is not None:
-                _ = predictor.predictor.handle_request(
-                    request=dict(
-                        type="reset_session",
-                        session_id=predictor.RUNTIME['session_id'],
-                    )
-                )
             response = predictor.predictor.handle_request(
                 request=dict(
                     type="start_session",
@@ -134,6 +127,20 @@ def inference(args):
                 break
         if len(kps_list) == 0:
             kps_list = None
+
+        if predictor.RUNTIME['session_id'] is not None:
+            # _ = predictor.predictor.handle_request(
+            #     request=dict(
+            #         type="reset_session",
+            #         session_id=predictor.RUNTIME['session_id'],
+            #     )
+            # )
+            _ = predictor.predictor.handle_request(
+                request=dict(
+                    type="close_session",
+                    session_id=predictor.RUNTIME['session_id'],
+                )
+            )
 
         with torch.autocast("cuda", enabled=False):
             predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)

@@ -678,12 +678,12 @@ class OfflineApp:
                 else:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
-                img = cv2.imread(image_path)
-                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                cv2.imwrite(
-                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                    rend_img.astype(np.uint8),
-                )
+                # img = cv2.imread(image_path)
+                # rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                # cv2.imwrite(
+                #     f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                #     rend_img.astype(np.uint8),
+                # )
 
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)

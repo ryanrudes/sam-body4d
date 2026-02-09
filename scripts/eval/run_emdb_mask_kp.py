@@ -126,9 +126,15 @@ def inference(args):
             )
         
         if predictor.RUNTIME['session_id'] is not None:
+            # _ = predictor.predictor.handle_request(
+            #     request=dict(
+            #         type="reset_session",
+            #         session_id=predictor.RUNTIME['session_id'],
+            #     )
+            # )
             _ = predictor.predictor.handle_request(
                 request=dict(
-                    type="reset_session",
+                    type="close_session",
                     session_id=predictor.RUNTIME['session_id'],
                 )
             )

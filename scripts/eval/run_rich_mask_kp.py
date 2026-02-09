@@ -23,7 +23,6 @@ def inference(args):
 
     # inference
     for seq in tqdm(vids):
-
         seq_id = seq.split('_')[-1]
         frame_list = labels[seq]['frame_id']
         frame_list = [f"{args.data_dir}/{seq}/{fi:05d}_{seq_id}.jpeg" for fi in frame_list]
@@ -53,13 +52,6 @@ def inference(args):
             resized_batch_frames = resize_images_longest_side(batch_frames)
             ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
             # initialise and reset predictor state
-            if predictor.RUNTIME['session_id'] is not None:
-                _ = predictor.predictor.handle_request(
-                    request=dict(
-                        type="reset_session",
-                        session_id=predictor.RUNTIME['session_id'],
-                    )
-                )
             response = predictor.predictor.handle_request(
                 request=dict(
                     type="start_session",
@@ -118,6 +110,20 @@ def inference(args):
                 obj_dict=obj_dict, 
                 resized_batch_frames=resized_batch_frames,
                 original_size=(width, height),
+            )
+
+        if predictor.RUNTIME['session_id'] is not None:
+            # _ = predictor.predictor.handle_request(
+            #     request=dict(
+            #         type="reset_session",
+            #         session_id=predictor.RUNTIME['session_id'],
+            #     )
+            # )
+            _ = predictor.predictor.handle_request(
+                request=dict(
+                    type="close_session",
+                    session_id=predictor.RUNTIME['session_id'],
+                )
             )
 
         with torch.autocast("cuda", enabled=False):
