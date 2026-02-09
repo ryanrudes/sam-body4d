@@ -836,3 +836,70 @@ def majority_keypoints_in_mask(keypoints: np.ndarray, mask: np.ndarray) -> bool:
     num_inside = np.sum(mask[y[valid], x[valid]])
     return num_inside > (num_valid / 2)
 
+import numpy as np
+
+def bbox_similar_to_mask_bbox(
+    bbox: np.ndarray,
+    mask: np.ndarray,
+    iou_thr: float = 0.5,
+    center_thr: float = 0.25,
+    size_thr: float = 0.5,
+) -> bool:
+    """
+    Return True if input bbox [x1,y1,x2,y2] is similar to the bbox derived from mask.
+
+    Similarity checks:
+      1) IoU(bbox, mask_bbox) >= iou_thr
+      2) center distance (normalized by mask bbox size) <= center_thr
+      3) size ratio similarity (min(w)/max(w) and min(h)/max(h)) >= size_thr
+
+    Args:
+        bbox: np.ndarray/list [x1,y1,x2,y2]
+        mask: HxW mask (bool or 0/1 or 0..255)
+        iou_thr: IoU threshold
+        center_thr: normalized center distance threshold
+        size_thr: minimum ratio similarity for width and height
+
+    Returns:
+        bool
+    """
+    if bbox is None or mask is None:
+        return False
+
+    m = mask.astype(bool)
+    if m.sum() == 0:
+        return False
+
+    ys, xs = np.nonzero(m)
+    x1m, x2m = int(xs.min()), int(xs.max()) + 1
+    y1m, y2m = int(ys.min()), int(ys.max()) + 1
+
+    x1, y1, x2, y2 = np.rint(np.asarray(bbox)).astype(int)
+
+    # sanitize
+    if x2 <= x1 or y2 <= y1 or x2m <= x1m or y2m <= y1m:
+        return False
+
+    # IoU
+    ix1, iy1 = max(x1, x1m), max(y1, y1m)
+    ix2, iy2 = min(x2, x2m), min(y2, y2m)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    area_b = (x2 - x1) * (y2 - y1)
+    area_m = (x2m - x1m) * (y2m - y1m)
+    union = area_b + area_m - inter
+    iou = inter / union if union > 0 else 0.0
+
+    # center distance normalized by mask bbox size
+    cbx, cby = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    cmx, cmy = (x1m + x2m) / 2.0, (y1m + y2m) / 2.0
+    mw, mh = (x2m - x1m), (y2m - y1m)
+    norm = max(np.hypot(mw, mh), 1e-6)
+    center_dist = np.hypot(cbx - cmx, cby - cmy) / norm
+
+    # size similarity (ratio close to 1)
+    bw, bh = (x2 - x1), (y2 - y1)
+    w_sim = min(bw, mw) / max(bw, mw)
+    h_sim = min(bh, mh) / max(bh, mh)
+    size_sim = min(w_sim, h_sim)
+
+    return (iou >= iou_thr) and (center_dist <= center_thr) and (size_sim >= size_thr)
