@@ -19,13 +19,13 @@ def inference(args):
     seq_list_1 = glob.glob(os.path.join(args.data_dir, '*'))
     seq_list_1.sort()
 
-    for seq_1 in tqdm(seq_list_1):
+    for seq_1 in tqdm(seq_list_1):  # pair23
         if os.path.isdir(seq_1):
             seq_list_2 = glob.glob(os.path.join(seq_1, '*'))
             seq_list_2.sort()
-            for seq_2 in seq_list_2:
+            for seq_2 in seq_list_2:    # fight23
                 if os.path.isdir(seq_2):
-                    camera_list = glob.glob(os.path.join(seq_2, 'exo', '*'))
+                    camera_list = glob.glob(os.path.join(seq_2, 'images', '*'))
                     camera_list.sort()
                     # for each cam
                     for cam in tqdm(camera_list):
@@ -37,27 +37,28 @@ def inference(args):
                         output_dir = os.path.join(args.output_dir, os.path.basename(seq_1), os.path.basename(seq_2), cam_name)
                         predictor.OUTPUT_DIR = output_dir
                         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
-                        frame_list = glob.glob(os.path.join(seq_2, 'exo', cam_name, 'images', '*.jpg'))
-                        seq_path = os.path.join(os.path.join(seq_2, 'exo', cam_name, 'images'))
+                        frame_list = glob.glob(os.path.join(seq_2, 'images', cam_name, '*.jpg'))
+                        seq_path = os.path.join(os.path.join(seq_2, 'images', cam_name))
                         frame_list.sort()
+                        frame_name_list = [os.path.basename(fr).split('.')[0] for fr in frame_list]
                         one_frame = Image.open(frame_list[0]).convert('RGB')
                         width, height = one_frame.size
-                        box_list = glob.glob(os.path.join(seq_2, 'processed_data', 'bbox', cam_name, '*.npy'))
-                        box_list.sort()
-
-                        assert len(box_list) == len(frame_list), f"num of boxes {len(box_list)} != num of frames {len(frame_list)}"
+                        seg_list = glob.glob(os.path.join(seq_2, 'seg', 'img_seg_mask', cam_name))
+                        num_objects = len(seg_list)
 
                         # explore the num of objects and only perform text segmentation on frame with 2 persons
                         num_frames = len(frame_list)
-                        
-                        cover_ratio_dict = {}
+                        max_cover_frame_idx = -1
                         for start_frame_idx in range(num_frames):
-                            bbox_start = np.load(box_list[start_frame_idx], allow_pickle=True).item()
-                            num_objects = len(bbox_start)
-                            if num_objects == 2:
-                                cover_ratio_dict[start_frame_idx] = iou_over_threshold(bbox_start['aria01'], bbox_start['aria02'])
-                        max_cover_frame_idx = max(cover_ratio_dict, key=cover_ratio_dict.get)
-                        bbox_start = np.load(box_list[max_cover_frame_idx], allow_pickle=True).item()
+                            try:
+                                if masks_low_overlap(os.path.join(seg_list[0], f'{frame_name_list[start_frame_idx]}.png'), 
+                                    os.path.join(seg_list[1], f'{frame_name_list[start_frame_idx]}.png'), threshold=0.2):
+                                    max_cover_frame_idx = start_frame_idx
+                                    break
+                            except:
+                                continue
+
+                        assert max_cover_frame_idx >= 0
 
                         batch_frames = [Image.open(bf).convert("RGB") for bf in frame_list]
                         resized_batch_frames = resize_images_longest_side(batch_frames)
@@ -83,35 +84,12 @@ def inference(args):
                                     text=prompt_text_str,
                                 )
                             )
-                            # out = response["outputs"]
-                            # # only focus on target person
-                            # obj_dict = {}   # key: inference_id (start from 1), value: sam_id
-                            # obj_list = []
-                            # for obj_id, bbox_obj in bbox_start.items():
-                            #     bbox_obj = bbox_obj*ratio # 17 x 3
-                            #     for out_obj_id in out['out_obj_ids']:
-                            #         if bbox_similar_to_mask_bbox(bbox_obj, out['out_binary_masks'][out_obj_id]):
-                            #             obj_dict[int(obj_id[-1])] = out_obj_id.item()
-                            #             obj_list.append(out_obj_id.item())
-                            #     predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
-                            # # remove other person
-                            # for out_id in out['out_obj_ids']:
-                            #     if out_id.item() in obj_list:
-                            #         continue
-                            #     response = predictor.predictor.handle_request(
-                            #         request=dict(
-                            #             type="remove_object",
-                            #             session_id=predictor.RUNTIME['session_id'],
-                            #             obj_id=out_id.item(),
-                            #         )
-                            #     )
-                                
                             outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'])
 
                             # only focus on target person
                             obj_dict = {}   # key: inference_id (start from 1), value: sam_id
                             obj_list = []
-                            for obj_id, bbox_obj in bbox_start.items():
+                            for obj_id, bbox_obj in enumerate(seg_list):
                                 bbox_obj = bbox_obj*ratio # 17 x 3
                                 for out_obj_id in outputs_per_frame[max_cover_frame_idx]['out_obj_ids']:
                                     mapped_id = np.where(outputs_per_frame[max_cover_frame_idx]['out_obj_ids'] == out_obj_id)[0].item()
@@ -129,24 +107,7 @@ def inference(args):
                             original_size=(width, height),
                         )
                         # 4. hmr upon masks
-
-                        # kps_list = []
-                        # for obj_id in range(3):
-                        #     try:
-                        #         seq_name_with_id = f'{seq}_{obj_id}'
-                        #         kps_list.append(kp[seq_name_with_id])
-                        #     except:
-                        #         break
-                        # if len(kps_list) == 0:
-                        #     kps_list = None
-
                         if predictor.RUNTIME['session_id'] is not None:
-                            # _ = predictor.predictor.handle_request(
-                            #     request=dict(
-                            #         type="reset_session",
-                            #         session_id=predictor.RUNTIME['session_id'],
-                            #     )
-                            # )
                             _ = predictor.predictor.handle_request(
                                 request=dict(
                                     type="close_session",

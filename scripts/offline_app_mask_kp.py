@@ -447,8 +447,8 @@ class OfflineApp:
                     idx = np.where(output['out_obj_ids'] == sam_obj_id)[0]
                     if len(idx) == 0:
                         continue
-                    msk[output['out_binary_masks'][idx][0].astype(np.uint8) > 0] = out_obj_id
-                    mask = output['out_binary_masks'][idx][0].astype(np.uint8) * 255
+                    msk[output['out_binary_masks'][idx.item()].astype(np.uint8) > 0] = out_obj_id
+                    mask = output['out_binary_masks'][idx.item()].astype(np.uint8) * 255
                     img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             
             msk_pil = cv2.resize(msk, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
@@ -932,3 +932,27 @@ def iou_over_threshold(bbox1: np.ndarray, bbox2: np.ndarray, threshold=0.7) -> b
     uncovered_ratio = 1.0 - inter_area / small_area
 
     return uncovered_ratio
+
+def masks_low_overlap(mask_path1, mask_path2, threshold=0.2):
+    # 两个文件必须都存在
+    if not (os.path.exists(mask_path1) and os.path.exists(mask_path2)):
+        return False
+
+    mask1 = cv2.imread(mask_path1, cv2.IMREAD_GRAYSCALE)
+    mask2 = cv2.imread(mask_path2, cv2.IMREAD_GRAYSCALE)
+    if mask1 is None or mask2 is None:
+        return False
+
+    m1 = mask1 > 0
+    m2 = mask2 > 0
+
+    area1 = m1.sum()
+    area2 = m2.sum()
+    if area1 == 0 or area2 == 0:
+        return False
+
+    intersection = (m1 & m2).sum()
+    overlap_ratio = intersection / min(area1, area2)
+
+    # 不重合或重合率低，都返回 True
+    return overlap_ratio < threshold

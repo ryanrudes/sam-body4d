@@ -196,6 +196,7 @@ class Sam3VideoPredictor:
         )
 
         if max_num_objects is not None:
+            prev_max = self.model.max_num_objects
             self.model.max_num_objects = max_num_objects
 
         try:
@@ -230,6 +231,8 @@ class Sam3VideoPredictor:
             logger.debug(
                 f"propagation ended in session {session_id}; {self._get_session_stats()}"
             )
+            if max_num_objects is not None:
+                self.model.max_num_objects = prev_max
 
     def reset_session(self, session_id):
         """Reset the session to its initial state (as when it's initial opened)."""

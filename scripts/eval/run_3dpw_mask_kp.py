@@ -27,6 +27,7 @@ def inference(args):
     for seq in tqdm(test_seq_name_list):
         # 0. init outputs
         # if seq!='downtown_cafe_00':
+        # if seq!='downtown_bus_00':
         #     continue
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir
@@ -40,10 +41,12 @@ def inference(args):
         # explore the num of objects
         num_objects = 0
         num_frames = len(frame_list)
+        box_list = []
         for obj_id in range(3):
             seq_name_with_id = f'{seq}_{obj_id}'
             try:
                 bbox = bboxes[seq_name_with_id]['bbx_xyxy'][0].numpy()
+                box_list.append(bbox)
                 num_objects += 1
             except:
                 break
@@ -86,7 +89,10 @@ def inference(args):
                     for obj_id in range(num_objects):
                         seq_name_with_id = f'{seq}_{obj_id}'
                         kp_obj_id = kp[seq_name_with_id][0].numpy()*ratio # 17 x 3
+                        box_obj_id = box_list[obj_id]*ratio
                         for out_obj_id in out['out_obj_ids']:
+                            if bbox_similar_to_mask_bbox(box_obj_id, out['out_binary_masks'][out_obj_id]):
+                                a = 1
                             if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
                                 obj_dict[obj_id+1] = out_obj_id.item()
                                 obj_list.append(out_obj_id.item())
@@ -142,8 +148,8 @@ def inference(args):
                 )
             )
 
-        with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
+        # with torch.autocast("cuda", enabled=False):
+        #     predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
 
 
 if __name__ == "__main__":
