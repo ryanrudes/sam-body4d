@@ -378,7 +378,7 @@ def mask_completion_and_iou_final(pred_amodal_masks, pred_res, obj_id, batch_mas
     
     return iou_dict_obj_id, occ_dict_obj_id, final_pred_amodal_masks_com
 
-def propagate_in_video(predictor, session_id, max_num_objects):
+def propagate_in_video(predictor, session_id, max_num_objects=None):
     # we will just propagate from frame 0 to the end of the video
     outputs_per_frame = {}
     for response in predictor.handle_stream_request(
@@ -903,3 +903,32 @@ def bbox_similar_to_mask_bbox(
     size_sim = min(w_sim, h_sim)
 
     return (iou >= iou_thr) and (center_dist <= center_thr) and (size_sim >= size_thr)
+
+import numpy as np
+
+def iou_over_threshold(bbox1: np.ndarray, bbox2: np.ndarray, threshold=0.7) -> bool:
+    bbox1 = np.asarray(bbox1, dtype=np.float64).reshape(-1)
+    bbox2 = np.asarray(bbox2, dtype=np.float64).reshape(-1)
+
+    # intersection
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+
+    inter_w = max(0.0, x2 - x1)
+    inter_h = max(0.0, y2 - y1)
+    inter_area = inter_w * inter_h
+
+    # areas
+    area1 = max(0.0, bbox1[2] - bbox1[0]) * max(0.0, bbox1[3] - bbox1[1])
+    area2 = max(0.0, bbox2[2] - bbox2[0]) * max(0.0, bbox2[3] - bbox2[1])
+
+    small_area = min(area1, area2)
+    if small_area <= 0:
+        return False
+
+    # 小框未被覆盖比例
+    uncovered_ratio = 1.0 - inter_area / small_area
+
+    return uncovered_ratio

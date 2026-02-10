@@ -1276,8 +1276,8 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
         if len(action_history)>0 and action_history[-1]['type'] == 'remove':
             # if last action is remove, we run full propagation to avoid any potential inconsistency
             propagation_type = "propagation_full"
-            obj_ids = list(inference_state['cached_frame_outputs'][0].keys())
-            obj_ids = [obj_id.item() for obj_id in obj_ids]
+            # obj_ids = list(inference_state['cached_frame_outputs'][0].keys())
+            # obj_ids = [obj_id.item() for obj_id in obj_ids]
 
         return propagation_type, obj_ids
 

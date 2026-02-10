@@ -19,7 +19,7 @@ def inference(args):
     seq_list_1 = glob.glob(os.path.join(args.data_dir, '*'))
     seq_list_1.sort()
 
-    for seq_1 in seq_list_1:
+    for seq_1 in tqdm(seq_list_1):
         if os.path.isdir(seq_1):
             seq_list_2 = glob.glob(os.path.join(seq_1, '*'))
             seq_list_2.sort()
@@ -28,10 +28,10 @@ def inference(args):
                     camera_list = glob.glob(os.path.join(seq_2, 'exo', '*'))
                     camera_list.sort()
                     # for each cam
-                    for cam in camera_list:
+                    for cam in tqdm(camera_list):
                         cam_name = os.path.basename(cam)
                         # 0. init outputs
-                        # if seq!='downtown_cafe_00':
+                        # if cam_name!='cam22':
                         #     continue
                         
                         output_dir = os.path.join(args.output_dir, os.path.basename(seq_1), os.path.basename(seq_2), cam_name)
@@ -47,78 +47,87 @@ def inference(args):
 
                         assert len(box_list) == len(frame_list), f"num of boxes {len(box_list)} != num of frames {len(frame_list)}"
 
-                        # explore the num of objects
+                        # explore the num of objects and only perform text segmentation on frame with 2 persons
                         num_frames = len(frame_list)
-                        bbox0 = np.load(box_list[0], allow_pickle=True).item()
-                        num_objects = len(bbox0)
                         
-                        # TODO: avoid oom
-                        base_batch_size = num_frames
-                        
-                        for i in range(0, len(frame_list), base_batch_size):
-                            batch_frames = frame_list[i:i + base_batch_size]
-                            batch_frames = [Image.open(bf).convert("RGB") for bf in batch_frames]
-                            resized_batch_frames = resize_images_longest_side(batch_frames)
-                            ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
-                            # initialise and reset predictor state
+                        cover_ratio_dict = {}
+                        for start_frame_idx in range(num_frames):
+                            bbox_start = np.load(box_list[start_frame_idx], allow_pickle=True).item()
+                            num_objects = len(bbox_start)
+                            if num_objects == 2:
+                                cover_ratio_dict[start_frame_idx] = iou_over_threshold(bbox_start['aria01'], bbox_start['aria02'])
+                        max_cover_frame_idx = max(cover_ratio_dict, key=cover_ratio_dict.get)
+                        bbox_start = np.load(box_list[max_cover_frame_idx], allow_pickle=True).item()
+
+                        batch_frames = [Image.open(bf).convert("RGB") for bf in frame_list]
+                        resized_batch_frames = resize_images_longest_side(batch_frames)
+                        ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
+                        # initialise and reset predictor state
+                        response = predictor.predictor.handle_request(
+                            request=dict(
+                                type="start_session",
+                                resource_path=resized_batch_frames,
+                            )
+                        )
+                        predictor.RUNTIME['session_id'] = response["session_id"]
+                        predictor.RUNTIME['out_obj_ids'] = []
+
+                        # load bbox (start frame) 
+                        prompt_text_str = "person"
+                        with torch.autocast(device_type="cuda", dtype=torch.float16):
                             response = predictor.predictor.handle_request(
                                 request=dict(
-                                    type="start_session",
-                                    resource_path=resized_batch_frames,
+                                    type="add_prompt",
+                                    session_id=predictor.RUNTIME['session_id'],
+                                    frame_index=0,
+                                    text=prompt_text_str,
                                 )
                             )
-                            predictor.RUNTIME['session_id'] = response["session_id"]
-                            predictor.RUNTIME['out_obj_ids'] = []
-
-                            # 1. load bbox (first frame)
-                            if i == 0:    
-                                prompt_text_str = "person"
-                                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                                    response = predictor.predictor.handle_request(
-                                        request=dict(
-                                            type="add_prompt",
-                                            session_id=predictor.RUNTIME['session_id'],
-                                            frame_index=0,
-                                            text=prompt_text_str,
-                                        )
-                                    )
-                                    out = response["outputs"]
-                                    
-                                    # only focus on target person
-                                    obj_dict = {}   # key: inference_id (start from 1), value: sam_id
-                                    obj_list = []
-                                    for obj_id, bbox_obj in bbox0.items():
-                                        bbox_obj = bbox_obj*ratio # 17 x 3
-                                        for out_obj_id in out['out_obj_ids']:
-                                            if bbox_similar_to_mask_bbox(bbox_obj, out['out_binary_masks'][out_obj_id]):
-                                                obj_dict[int(obj_id[-1])] = out_obj_id.item()
-                                                obj_list.append(out_obj_id.item())
-                                        predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
+                            # out = response["outputs"]
+                            # # only focus on target person
+                            # obj_dict = {}   # key: inference_id (start from 1), value: sam_id
+                            # obj_list = []
+                            # for obj_id, bbox_obj in bbox_start.items():
+                            #     bbox_obj = bbox_obj*ratio # 17 x 3
+                            #     for out_obj_id in out['out_obj_ids']:
+                            #         if bbox_similar_to_mask_bbox(bbox_obj, out['out_binary_masks'][out_obj_id]):
+                            #             obj_dict[int(obj_id[-1])] = out_obj_id.item()
+                            #             obj_list.append(out_obj_id.item())
+                            #     predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
+                            # # remove other person
+                            # for out_id in out['out_obj_ids']:
+                            #     if out_id.item() in obj_list:
+                            #         continue
+                            #     response = predictor.predictor.handle_request(
+                            #         request=dict(
+                            #             type="remove_object",
+                            #             session_id=predictor.RUNTIME['session_id'],
+                            #             obj_id=out_id.item(),
+                            #         )
+                            #     )
                                 
-                                    # # segment on all frames
-                                    for out_id in out['out_obj_ids']:
-                                        if out_id.item() in obj_list:
-                                            continue
-                                        response = predictor.predictor.handle_request(
-                                            request=dict(
-                                                type="remove_object",
-                                                session_id=predictor.RUNTIME['session_id'],
-                                                obj_id=out_id.item(),
-                                            )
-                                        )
-                                        
-                                    outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
-                            else:
-                                # use previous frame masks as box for other frames
-                                pass
-                            # 3. save masks
-                            predictor.save_masks(
-                                start_frame_idx=i, 
-                                outputs_per_frame=outputs_per_frame, 
-                                obj_dict=obj_dict, 
-                                resized_batch_frames=resized_batch_frames,
-                                original_size=(width, height),
-                            )
+                            outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'])
+
+                            # only focus on target person
+                            obj_dict = {}   # key: inference_id (start from 1), value: sam_id
+                            obj_list = []
+                            for obj_id, bbox_obj in bbox_start.items():
+                                bbox_obj = bbox_obj*ratio # 17 x 3
+                                for out_obj_id in outputs_per_frame[max_cover_frame_idx]['out_obj_ids']:
+                                    mapped_id = np.where(outputs_per_frame[max_cover_frame_idx]['out_obj_ids'] == out_obj_id)[0].item()
+                                    if bbox_similar_to_mask_bbox(bbox_obj, outputs_per_frame[max_cover_frame_idx]['out_binary_masks'][mapped_id]):
+                                        obj_dict[int(obj_id[-1])] = out_obj_id.item()
+                                        obj_list.append(out_obj_id.item())
+                                predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
+                        
+                        # 3. save masks
+                        predictor.save_masks(
+                            start_frame_idx=0, 
+                            outputs_per_frame=outputs_per_frame, 
+                            obj_dict=obj_dict, 
+                            resized_batch_frames=resized_batch_frames,
+                            original_size=(width, height),
+                        )
                         # 4. hmr upon masks
 
                         # kps_list = []
@@ -145,8 +154,8 @@ def inference(args):
                                 )
                             )
 
-                        with torch.autocast("cuda", enabled=False):
-                            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
+                        # with torch.autocast("cuda", enabled=False):
+                        #     predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
 
 
 if __name__ == "__main__":
