@@ -155,7 +155,7 @@ def inference(args):
                             )
 
                         with torch.autocast("cuda", enabled=False):
-                            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
+                            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None, render=False)
 
 
 if __name__ == "__main__":
