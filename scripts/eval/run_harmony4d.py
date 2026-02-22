@@ -15,7 +15,6 @@ def inference(args):
     predictor = OfflineApp()
 
     # init data
-    test_seq_name_list = {}
     seq_list_1 = glob.glob(os.path.join(args.data_dir, '*'))
     seq_list_1.sort()
 
@@ -33,7 +32,6 @@ def inference(args):
                         # 0. init outputs
                         # if cam_name!='cam22':
                         #     continue
-                        
                         output_dir = os.path.join(args.output_dir, os.path.basename(seq_1), os.path.basename(seq_2), cam_name)
                         predictor.OUTPUT_DIR = output_dir
                         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
@@ -83,31 +81,7 @@ def inference(args):
                                     text=prompt_text_str,
                                 )
                             )
-                            # out = response["outputs"]
-                            # # only focus on target person
-                            # obj_dict = {}   # key: inference_id (start from 1), value: sam_id
-                            # obj_list = []
-                            # for obj_id, bbox_obj in bbox_start.items():
-                            #     bbox_obj = bbox_obj*ratio # 17 x 3
-                            #     for out_obj_id in out['out_obj_ids']:
-                            #         if bbox_similar_to_mask_bbox(bbox_obj, out['out_binary_masks'][out_obj_id]):
-                            #             obj_dict[int(obj_id[-1])] = out_obj_id.item()
-                            #             obj_list.append(out_obj_id.item())
-                            #     predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
-                            # # remove other person
-                            # for out_id in out['out_obj_ids']:
-                            #     if out_id.item() in obj_list:
-                            #         continue
-                            #     response = predictor.predictor.handle_request(
-                            #         request=dict(
-                            #             type="remove_object",
-                            #             session_id=predictor.RUNTIME['session_id'],
-                            #             obj_id=out_id.item(),
-                            #         )
-                            #     )
-                                
                             outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'])
-
                             # only focus on target person
                             obj_dict = {}   # key: inference_id (start from 1), value: sam_id
                             obj_list = []
@@ -119,7 +93,6 @@ def inference(args):
                                         obj_dict[int(obj_id[-1])] = out_obj_id.item()
                                         obj_list.append(out_obj_id.item())
                                 predictor.RUNTIME['out_obj_ids'].append(int(obj_id[-1]))
-                        
                         # 3. save masks
                         predictor.save_masks(
                             start_frame_idx=0, 
@@ -129,24 +102,7 @@ def inference(args):
                             original_size=(width, height),
                         )
                         # 4. hmr upon masks
-
-                        # kps_list = []
-                        # for obj_id in range(3):
-                        #     try:
-                        #         seq_name_with_id = f'{seq}_{obj_id}'
-                        #         kps_list.append(kp[seq_name_with_id])
-                        #     except:
-                        #         break
-                        # if len(kps_list) == 0:
-                        #     kps_list = None
-
                         if predictor.RUNTIME['session_id'] is not None:
-                            # _ = predictor.predictor.handle_request(
-                            #     request=dict(
-                            #         type="reset_session",
-                            #         session_id=predictor.RUNTIME['session_id'],
-                            #     )
-                            # )
                             _ = predictor.predictor.handle_request(
                                 request=dict(
                                     type="close_session",

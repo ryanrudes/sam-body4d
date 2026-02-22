@@ -61,7 +61,7 @@ def compute_camcoord_metrics(batch, pelvis_idxs=[1, 2], fps=30, mask=None):
         [pred_j3d, target_j3d, pred_verts, target_verts], pelvis_idxs=pelvis_idxs
     )
 
-    # save_path = "ply_outputs/" + "officePhoneCall-0"
+    # save_path = "ply_outputs/" + "harmony4d"
     # os.makedirs(save_path, exist_ok=True)
     # for i in range(len(pred_verts)):
     #     save_smpl_overlap_ply_single(target_verts, pred_verts, i, f"{save_path}/verts_overlap_{i}.ply")

@@ -178,6 +178,7 @@ class Conversion:
         smpl_model: smplx.SMPLX,
         method: str = "pymomentum",
         batch_size: int = 256,
+        hand_pose_dim: int = 6,
     ) -> None:
         """Initialize the conversion instance.
 
@@ -203,7 +204,7 @@ class Conversion:
             self._hand_pose_dim = 0
         elif smpl_model.v_template.shape[0] == _NUM_VERTICES_SMPLX:
             self.smpl_model_type = "smplx"
-            self._hand_pose_dim = 6 if smpl_model.use_pca else 45
+            self._hand_pose_dim = hand_pose_dim if smpl_model.use_pca else 45
         else:
             raise ValueError(
                 f"Unsupported SMPL model type! Expected {_NUM_VERTICES_SMPL} or {_NUM_VERTICES_SMPLX} vertices, got {smpl_model.v_template.shape[0]}"

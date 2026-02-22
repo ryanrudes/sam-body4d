@@ -41,7 +41,8 @@ class MetricMocap:
             return
 
         # Move to cuda if not
-        # smplx_vertices = torch.tensor(smplx_vertices).cuda()
+        if smplx_vertices is not None:
+            smplx_vertices = torch.tensor(smplx_vertices).cuda()
         self.smplx = self.smplx.cuda()
         # for g in ["male", "female", "neutral"]:
         self.smpl["male"] = self.smpl["male"].cuda()
@@ -80,30 +81,34 @@ class MetricMocap:
             smpl_out = smplx(**outputs)
         else:
             smpl_out = self.smplx(**outputs)
-        pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
-        # pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smplx_vertices])
+
+        if smplx_vertices is not None:
+            pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smplx_vertices])
+        else: 
+            pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
+        
         pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
         
-        # smpl_out = self.smpl[gender](**outputs)
-        # pred_c_verts = smpl_out.vertices
+        # # smpl_out = self.smpl[gender](**outputs)
+        # # pred_c_verts = smpl_out.vertices
         
         # verts = pred_c_verts  # [B, V, 3], unit: meter
         # y_max = verts[:, :, 1].max(dim=1).values
         # y_min = verts[:, :, 1].min(dim=1).values
         # smpl_height_smpl = y_max - y_min  # [B], m
 
-        # # verts = smpl_out.vertices  # [B, V, 3], unit: meter
-        # # y_max = verts[:, :, 1].max(dim=1).values
-        # # y_min = verts[:, :, 1].min(dim=1).values
-        # # smpl_height_smplx = y_max - y_min  # [B], m
+        # # # verts = smpl_out.vertices  # [B, V, 3], unit: meter
+        # # # y_max = verts[:, :, 1].max(dim=1).values
+        # # # y_min = verts[:, :, 1].min(dim=1).values
+        # # # smpl_height_smplx = y_max - y_min  # [B], m
 
-        # verts = smplx_vertices  # [B, V, 3], unit: meter
+        # verts = target_c_verts  # [B, V, 3], unit: meter
         # y_max = verts[:, :, 1].max(dim=1).values
         # y_min = verts[:, :, 1].min(dim=1).values
-        # smpl_height_smplx_ = y_max - y_min  # [B], m
+        # smpl_height_smpl_tgt = y_max - y_min  # [B], m
 
-        # pred_c_verts = pred_c_verts * ((mhr_height[0].item())/(smpl_height[0].item()*100))
-        # pred_c_j3d = torch.matmul(self.J_regressor, pred_c_verts)
+        # pred_c_verts = pred_c_verts * ((smpl_height_smpl_tgt[0].item())/(smpl_height_smpl[0].item()))
+        # # pred_c_j3d = torch.matmul(self.J_regressor, pred_c_verts)
 
         # Metric of current sequence
         batch_eval = {
