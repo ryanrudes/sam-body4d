@@ -190,8 +190,8 @@ def compare_two_score_csvs_by_metric(
 
 # Example:
 compare_two_score_csvs_by_metric(
-    "/home/hmq/projects/sam-body4d/csv_results/3DPW-box-kp-post.csv", 
-    "/home/hmq/projects/sam-body4d/csv_results/3DPW-mask-text.csv", 
-    out_dir="/home/hmq/projects/sam-body4d/figs",
+    "/home/hmq/projects/hmr/sam-body4d/csv_results/3DPW-box-kp-post.csv", 
+    "/home/hmq/projects/hmr/sam-body4d/csv_results/3DPW-mask-kp-text-new.csv", 
+    out_dir="/home/hmq/projects/hmr/sam-body4d/figs",
     mark_max_gain=True
 )

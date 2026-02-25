@@ -17,10 +17,11 @@ from pathlib import Path
 
 from eval_utils.dataset_3dpw import ThreedpwSmplFullSeqDataset
 from eval_utils.metric_3dpw import MetricMocap
-from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
+# from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
 from eval_utils.std import suppress_stdout_stderr
+from eval_utils.kp_utils import points_on_mask, smpl21_missing_from70
 # from eval.flip_mhr import decode_joint_params
-from eval_utils.smplx_utils import make_smplx
+# from eval_utils.smplx_utils import make_smplx
 
 from eval_utils.smooth import postprocess_smpl_params
 
@@ -173,7 +174,7 @@ if __name__ == "__main__":
     mhr_model = MHR.from_files(folder=Path(f"{args.body_model_path}/assets"), lod=1, device=torch.device("cuda"))
 
     smpl_model = smplx.SMPLX(model_path=f"{args.body_model_path}/smplx", gender="neutral").cuda()
-    smplxd = make_smplx("supermotion_EVAL3DPW", body_model_path=args.body_model_path, ).cuda()
+    # smplxd = make_smplx("supermotion_EVAL3DPW", body_model_path=args.body_model_path, ).cuda()
     converter = Conversion(
         mhr_model=mhr_model, smpl_model=smpl_model, method="pytorch"
     )
@@ -201,9 +202,13 @@ if __name__ == "__main__":
         # if 'downtown_cafe' not in seq_name or obj_id != '1':
         #     continue
 
+        point_list = []
+
         # for seq in tqdm(seq_list):
         mhr_list = glob.glob(os.path.join(f"{result_path}/{seq_name}/mhr_params", "*data.npz"))
+        mhr_id_list = glob.glob(os.path.join(f"{result_path}/{seq_name}/mhr_params", "*id.npz"))
         mhr_list.sort()
+        mhr_id_list.sort()
 
         z = np.load(mhr_list[0], allow_pickle=True)
         zdata = z["data"]
@@ -212,8 +217,13 @@ if __name__ == "__main__":
         mhr_vertices_list = []
         for j in range(len(mhr_list)):
             z = np.load(mhr_list[j], allow_pickle=True)
+            z_id = np.load(mhr_id_list[j], allow_pickle=True)
             try:
-                data = z["data"][int(obj_id)]
+                if int(obj_id) == 1 and len(z_id["data"]) == 1:
+                    data = z["data"][0]
+                else:
+                    data = z["data"][int(obj_id)]
+                # data_id = z_id["data"][int(obj_id)]
                 # If pred_vertices is not available, use the mhr_model_params to compute the target vertices
                 mhr_parameters = {}
                 concatenated_sam3d_outputs = data
@@ -236,6 +246,15 @@ if __name__ == "__main__":
                 mhr_vertices[..., [1, 2]] *= -1  # Camera system difference in SAM3D-Body
                 mhr_vertices += 100.0 * concatenated_sam3d_outputs["pred_cam_t"]
                 mhr_vertices_list.append(mhr_vertices[0])
+
+                points = points_on_mask(
+                    concatenated_sam3d_outputs["mask"], 
+                    concatenated_sam3d_outputs["pred_keypoints_2d"], 
+                    save_path='test.jpg'
+                )
+                joints = smpl21_missing_from70(points)
+                point_list.append(points)
+
             except Exception as e:
                 # print(e)
                 mhr_vertices_list.append(mhr_vertices_list[-1])
@@ -345,10 +364,6 @@ if __name__ == "__main__":
         # data_filled = np.zeros((len(mhr_vertices), V, C), dtype=smpl_vertices.dtype)
         # data_filled[meta_data['mask'].cpu().numpy()] = smpl_vertices
 
-        del smpl_params['left_hand_pose']
-        del smpl_params['right_hand_pose']
-        del smpl_params['expression']
-
         # if args.result_path_flip != "":
         #     # process flip results
         #     result_path_flip = args.result_path_flip
@@ -416,6 +431,12 @@ if __name__ == "__main__":
         #         smpl_params["global_orient"], smpl_params2["global_orient"]
         #     )
         #     smpl_params = smpl_params_avg
+
+        # torch.save(smpl_params, f'{seq_name}_{obj_id}_tensor_dict.pth')
+
+        del smpl_params['left_hand_pose']
+        del smpl_params['right_hand_pose']
+        del smpl_params['expression']
 
         smpl_params = postprocess_smpl_params(
             smpl_params,

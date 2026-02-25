@@ -438,7 +438,7 @@ class OfflineApp:
         os.makedirs(IMAGE_PATH, exist_ok=True)
 
         for out_frame_idx, resized_frame in enumerate(resized_batch_frames):
-            output = outputs_per_frame.get(out_frame_idx, None)
+            output = outputs_per_frame.get(out_frame_idx+start_frame_idx, None)
             img = np.array(resized_frame).astype("uint8")
             msk = np.zeros_like(img[:, :, 0])
             if output is not None:
@@ -447,8 +447,18 @@ class OfflineApp:
                     idx = np.where(output['out_obj_ids'] == sam_obj_id)[0]
                     if len(idx) == 0:
                         continue
-                    msk[output['out_binary_masks'][idx.item()].astype(np.uint8) > 0] = out_obj_id
-                    mask = output['out_binary_masks'][idx.item()].astype(np.uint8) * 255
+                    # mask_hw: (H,W) np, bool or 0/1 or 0/255. True/1/255 = foreground
+                    mask_u8 = (output['out_binary_masks'][idx.item()].astype(np.uint8) > 0).astype(np.uint8)
+                    fg_area = mask_u8.sum()          # True 总面积
+                    min_area = fg_area / 100.0       # 阈值
+                    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask_u8, connectivity=8)
+                    keep = np.zeros_like(mask_u8)
+                    for i in range(1, num):          # 0 是背景
+                        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                            keep[labels == i] = 1
+                    mask_hw_clean = keep.astype(bool)   # (H,W)
+                    msk[mask_hw_clean] = out_obj_id
+                    mask = mask_hw_clean.astype(np.uint8) * 255
                     img = mask_painter(img, mask, mask_color=4 + out_obj_id)
             
             msk_pil = cv2.resize(msk, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
@@ -676,8 +686,10 @@ class OfflineApp:
                     id_current = None
                     num_empth_ids += 1
                 else:
-                    mask_output = mask_outputs[frame_id-num_empth_ids]
-                    id_current = id_batch[frame_id-num_empth_ids]
+                    # mask_output = mask_outputs[frame_id-num_empth_ids]
+                    # id_current = id_batch[frame_id-num_empth_ids]
+                    mask_output = mask_outputs[frame_id]
+                    id_current = id_batch[frame_id]
                 
                 if render:
                     img = cv2.imread(image_path)
@@ -838,7 +850,87 @@ def majority_keypoints_in_mask(keypoints: np.ndarray, mask: np.ndarray) -> bool:
     num_inside = np.sum(mask[y[valid], x[valid]])
     return num_inside > (num_valid / 2)
 
-import numpy as np
+# from __future__ import annotations
+
+# import numpy as np
+# import cv2
+
+
+def same_object_by_bbox_mask_iou(
+    bbox_xyxy: np.ndarray,
+    mask: np.ndarray,
+    *,
+    shrink_px: int = 10,
+    iou_thresh: float = 0.15,
+    min_intersection_px: int = 50,
+    min_box_area_px: int = 200,
+) -> bool:
+    """
+    Decide whether bbox (xyxy) and mask belong to the same object using IoU,
+    with a *strict* bias (easy to say NOT same):
+      - erode (shrink) mask before IoU
+      - require BOTH IoU >= iou_thresh AND intersection >= min_intersection_px
+      - reject tiny boxes by min_box_area_px
+
+    Args:
+        bbox_xyxy: (4,) np, [x1,y1,x2,y2]
+        mask: (H,W) np, 0/255 or 0/1
+        shrink_px: erode mask by pixels
+        iou_thresh: IoU threshold
+        min_intersection_px: minimal overlap pixels
+        min_box_area_px: minimal bbox area, otherwise False
+
+    Returns:
+        True if same object else False
+    """
+    if mask.ndim != 2:
+        raise ValueError(f"mask must be HxW, got {mask.shape}")
+    H, W = mask.shape
+
+    b = np.asarray(bbox_xyxy, dtype=np.float32).reshape(-1)
+    if b.size != 4:
+        raise ValueError(f"bbox_xyxy must have shape (4,), got {np.asarray(bbox_xyxy).shape}")
+
+    x1, y1, x2, y2 = b.tolist()
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+
+    ix1 = int(np.floor(x1))
+    iy1 = int(np.floor(y1))
+    ix2 = int(np.ceil(x2))
+    iy2 = int(np.ceil(y2))
+
+    ix1 = max(0, min(W, ix1))
+    ix2 = max(0, min(W, ix2))
+    iy1 = max(0, min(H, iy1))
+    iy2 = max(0, min(H, iy2))
+
+    bw = ix2 - ix1
+    bh = iy2 - iy1
+    box_area = bw * bh
+    if box_area <= 0 or box_area < int(min_box_area_px):
+        return False
+
+    mask_bool = mask > 0
+    if shrink_px > 0:
+        k = 2 * int(shrink_px) + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        mask_bool = cv2.erode(mask_bool.astype(np.uint8), kernel) > 0
+
+    # intersection pixels inside bbox
+    inter = int(mask_bool[iy1:iy2, ix1:ix2].sum())
+    if inter <= 0 or inter < int(min_intersection_px):
+        return False
+
+    mask_area = int(mask_bool.sum())
+    union = box_area + mask_area - inter
+    if union <= 0:
+        return False
+
+    iou = float(inter / union)
+    return iou >= float(iou_thresh)
 
 def bbox_similar_to_mask_bbox(
     bbox: np.ndarray,

@@ -21,14 +21,11 @@ def inference(args):
     bboxes = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_bbx_xyxy_uint16.pt'))
     kp = torch.load(os.path.join(args.data_dir, 'body4d_3dpw_vid2kp2d.pt'))
 
-    # batch_size = 1024
-
     # inference
     for seq in tqdm(test_seq_name_list):
         # 0. init outputs
-        # if seq!='downtown_cafe_00':
-        # if seq!='downtown_bus_00':
-        #     continue
+        if seq!='downtown_runForBus_01':
+            continue
         output_dir = os.path.join(args.output_dir, seq)
         predictor.OUTPUT_DIR = output_dir
         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
@@ -50,79 +47,8 @@ def inference(args):
                 num_objects += 1
             except:
                 break
-
-        # TODO: avoid oom
-        base_batch_size = num_frames
-        
-        for i in range(0, len(frame_list), base_batch_size):
-            batch_frames = frame_list[i:i + base_batch_size]
-            batch_frames = [Image.open(bf).convert("RGB") for bf in batch_frames]
-            resized_batch_frames = resize_images_longest_side(batch_frames)
-            ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
-            # initialise and reset predictor state
-            response = predictor.predictor.handle_request(
-                request=dict(
-                    type="start_session",
-                    resource_path=resized_batch_frames,
-                )
-            )
-            predictor.RUNTIME['session_id'] = response["session_id"]
-            predictor.RUNTIME['out_obj_ids'] = []
-
-            # 1. load bbox (first frame)
-            if i == 0:    
-                prompt_text_str = "person"
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    response = predictor.predictor.handle_request(
-                        request=dict(
-                            type="add_prompt",
-                            session_id=predictor.RUNTIME['session_id'],
-                            frame_index=0,
-                            text=prompt_text_str,
-                        )
-                    )
-                    out = response["outputs"]
-                    
-                    # only focus on target person
-                    obj_dict = {}   # key: inference_id (start from 1), value: sam_id
-                    obj_list = []
-                    for obj_id in range(num_objects):
-                        seq_name_with_id = f'{seq}_{obj_id}'
-                        kp_obj_id = kp[seq_name_with_id][0].numpy()*ratio # 17 x 3
-                        for out_obj_id in out['out_obj_ids']:
-                            if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
-                                obj_dict[obj_id+1] = out_obj_id.item()
-                                obj_list.append(out_obj_id.item())
-                        predictor.RUNTIME['out_obj_ids'].append(obj_id+1)
-                
-                    # # segment on all frames
-                    for out_id in out['out_obj_ids']:
-                        if out_id.item() in obj_list:
-                            continue
-                        response = predictor.predictor.handle_request(
-                            request=dict(
-                                type="remove_object",
-                                session_id=predictor.RUNTIME['session_id'],
-                                obj_id=out_id.item(),
-                            )
-                        )
-                        
-                    outputs_per_frame = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
-            else:
-                # use previous frame masks as box for other frames
-                pass
-            # 3. save masks
-            predictor.save_masks(
-                start_frame_idx=i, 
-                outputs_per_frame=outputs_per_frame, 
-                obj_dict=obj_dict, 
-                resized_batch_frames=resized_batch_frames,
-                original_size=(width, height),
-            )
-        # 4. hmr upon masks
-
         kps_list = []
-        for obj_id in range(3):
+        for obj_id in range(num_objects):
             try:
                 seq_name_with_id = f'{seq}_{obj_id}'
                 kps_list.append(kp[seq_name_with_id])
@@ -131,22 +57,148 @@ def inference(args):
         if len(kps_list) == 0:
             kps_list = None
 
-        if predictor.RUNTIME['session_id'] is not None:
-            # _ = predictor.predictor.handle_request(
-            #     request=dict(
-            #         type="reset_session",
-            #         session_id=predictor.RUNTIME['session_id'],
-            #     )
-            # )
-            _ = predictor.predictor.handle_request(
+        # TODO: avoid oom
+        mid = num_frames // 2
+        if seq=='downtown_runForBus_01':
+            mid = 500
+        frame_lista = frame_list[:mid]
+        frame_listb = frame_list[mid:]
+
+        # first half
+        batch_frames = frame_lista
+        batch_frames = [Image.open(bf).convert("RGB") for bf in batch_frames]
+        resized_batch_frames = resize_images_longest_side(batch_frames)
+        ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
+        
+        # 1. load bbox (first frame)
+        prompt_text_str = "person"
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # initialise and reset predictor state
+            response = predictor.predictor.handle_request(
                 request=dict(
-                    type="close_session",
-                    session_id=predictor.RUNTIME['session_id'],
+                    type="start_session",
+                    resource_path=resized_batch_frames[:mid],
                 )
             )
+            predictor.RUNTIME['session_id'] = response["session_id"]
+            predictor.RUNTIME['out_obj_ids'] = []
+            response = predictor.predictor.handle_request(
+                request=dict(
+                    type="add_prompt",
+                    session_id=predictor.RUNTIME['session_id'],
+                    frame_index=0,
+                    text=prompt_text_str,
+                )
+            )
+            out = response["outputs"]
+            # only focus on target person
+            obj_dicta = {}   # key: inference_id (start from 1), value: sam_id
+            obj_list = []
+            for obj_id in range(num_objects):
+                seq_name_with_id = f'{seq}_{obj_id}'
+                kp_obj_id = kp[seq_name_with_id][0].numpy()*ratio # 17 x 3
+                for out_obj_id in out['out_obj_ids']:
+                    if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
+                        obj_dicta[obj_id+1] = out_obj_id.item()
+                        obj_list.append(out_obj_id.item())
+                predictor.RUNTIME['out_obj_ids'].append(obj_id+1)
+        
+            # # segment on all frames
+            for out_id in out['out_obj_ids']:
+                if out_id.item() in obj_list:
+                    continue
+                response = predictor.predictor.handle_request(
+                    request=dict(
+                        type="remove_object",
+                        session_id=predictor.RUNTIME['session_id'],
+                        obj_id=out_id.item(),
+                    )
+                )
+            outputs_per_framea = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
+            if predictor.RUNTIME['session_id'] is not None:
+                _ = predictor.predictor.handle_request(
+                    request=dict(
+                        type="close_session",
+                        session_id=predictor.RUNTIME['session_id'],
+                    )
+                )
+            predictor.save_masks(
+                start_frame_idx=0, 
+                outputs_per_frame=outputs_per_framea, 
+                obj_dict=obj_dicta, 
+                resized_batch_frames=resized_batch_frames[:mid],
+                original_size=(width, height),
+            )
+
+            # second half
+            frame_listb = frame_listb[::-1]
+            batch_frames = frame_listb
+            batch_frames = [Image.open(bf).convert("RGB") for bf in batch_frames]
+            resized_batch_frames = resize_images_longest_side(batch_frames)
+            ratio = resized_batch_frames[0].size[-1] / batch_frames[0].size[-1]
+            response = predictor.predictor.handle_request(
+                request=dict(
+                    type="start_session",
+                    resource_path=resized_batch_frames,
+                )
+            )
+            predictor.RUNTIME['session_id'] = response["session_id"]
+            predictor.RUNTIME['out_obj_ids'] = []
+            response = predictor.predictor.handle_request(
+                request=dict(
+                    type="add_prompt",
+                    session_id=predictor.RUNTIME['session_id'],
+                    frame_index=0,
+                    text=prompt_text_str,
+                )
+            )
+            out = response["outputs"]
+            # only focus on target person
+            obj_dictb = {}   # key: inference_id (start from 1), value: sam_id
+            obj_list = []
+            for obj_id in range(num_objects):
+                seq_name_with_id = f'{seq}_{obj_id}'
+                kp_obj_id = kp[seq_name_with_id][-1].numpy()*ratio # 17 x 3
+                for out_obj_id in out['out_obj_ids']:
+                    if majority_keypoints_in_mask(kp_obj_id, out['out_binary_masks'][out_obj_id]):
+                        obj_dictb[obj_id+1] = out_obj_id.item()
+                        obj_list.append(out_obj_id.item())
+                predictor.RUNTIME['out_obj_ids'].append(obj_id+1)
+        
+            # # segment on all frames
+            for out_id in out['out_obj_ids']:
+                if out_id.item() in obj_list:
+                    continue
+                response = predictor.predictor.handle_request(
+                    request=dict(
+                        type="remove_object",
+                        session_id=predictor.RUNTIME['session_id'],
+                        obj_id=out_id.item(),
+                    )
+                )
+            outputs_per_frameb = propagate_in_video(predictor.predictor, predictor.RUNTIME['session_id'], max_num_objects=num_objects)
+            outputs_per_frameb = {num_frames - k - 1: v for k, v in reversed(outputs_per_frameb.items())}
+            if predictor.RUNTIME['session_id'] is not None:
+                _ = predictor.predictor.handle_request(
+                    request=dict(
+                        type="close_session",
+                        session_id=predictor.RUNTIME['session_id'],
+                    )
+                )
+
+            # 3. save masks
+            predictor.save_masks(
+                start_frame_idx=mid, 
+                outputs_per_frame=outputs_per_frameb, 
+                obj_dict=obj_dictb, 
+                resized_batch_frames=resized_batch_frames[::-1],
+                original_size=(width, height),
+            )
+
+        # 4. hmr upon masks
 
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=None)
+            predictor.on_4d_generation(frame_list, seq_path=seq_path, kps_list=kps_list)
 
 
 if __name__ == "__main__":
