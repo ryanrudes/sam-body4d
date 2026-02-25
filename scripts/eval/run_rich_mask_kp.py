@@ -126,8 +126,17 @@ def inference(args):
                 )
             )
 
+        kp_list = []
+        for obj_id in range(1):
+            try:
+                kp_list.append(kp)
+            except:
+                break
+        if len(kp_list) == 0:
+            kp_list = None
+
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list)
+            predictor.on_4d_generation(frame_list, kps_list=kp_list)
 
 
 if __name__ == "__main__":

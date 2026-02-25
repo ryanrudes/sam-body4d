@@ -140,8 +140,10 @@ def inference(args):
             )
         
         # 4. hmr upon masks
+        if len(kp_list) == 0:
+            kp_list = None
         with torch.autocast("cuda", enabled=False):
-            predictor.on_4d_generation(frame_list)
+            predictor.on_4d_generation(frame_list, kps_list=kp_list)
 
 
 if __name__ == "__main__":
