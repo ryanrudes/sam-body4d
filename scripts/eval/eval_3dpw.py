@@ -199,8 +199,9 @@ if __name__ == "__main__":
                     if isinstance(vv, torch.Tensor):
                         v[kk] = vv.cuda()
 
-        # if 'downtown_cafe' not in seq_name or obj_id != '1':
-        #     continue
+        # /home/hmq/projects/hmr/DPoser-X/saves/downtown_rampAndStairs_00_0_tensor_dict.pth
+        if 'downtown_runForBus_01' not in seq_name or obj_id != '0':
+            continue
 
         point_list = []
 
@@ -247,13 +248,13 @@ if __name__ == "__main__":
                 mhr_vertices += 100.0 * concatenated_sam3d_outputs["pred_cam_t"]
                 mhr_vertices_list.append(mhr_vertices[0])
 
-                points = points_on_mask(
-                    concatenated_sam3d_outputs["mask"], 
-                    concatenated_sam3d_outputs["pred_keypoints_2d"], 
-                    save_path='test.jpg'
-                )
-                joints = smpl21_missing_from70(points)
-                point_list.append(points)
+                # points = points_on_mask(
+                #     concatenated_sam3d_outputs["mask"], 
+                #     concatenated_sam3d_outputs["pred_keypoints_2d"], 
+                #     save_path='test.jpg'
+                # )
+                # joints = smpl21_missing_from70(points)
+                # point_list.append(points)
 
             except Exception as e:
                 # print(e)
@@ -433,6 +434,9 @@ if __name__ == "__main__":
         #     smpl_params = smpl_params_avg
 
         # torch.save(smpl_params, f'{seq_name}_{obj_id}_tensor_dict.pth')
+
+        smpl_params = torch.load('/home/hmq/projects/hmr/DPoser-X/saves/downtown_runForBus_01_0_tensor_dict.pth')
+        # smpl_params = torch.load('/home/hmq/projects/hmr/sam-body4d/downtown_rampAndStairs_00_0_tensor_dict.pth')
 
         del smpl_params['left_hand_pose']
         del smpl_params['right_hand_pose']
