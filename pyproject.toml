@@ -7,7 +7,7 @@ name = "sam-body4d"
 version = "0.1.0"
 description = "SAM-Body4D: Training-Free 4D Human Body Mesh Recovery from Videos"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 dependencies = [
     "gradio~=6.0.0",
@@ -30,7 +30,7 @@ dependencies = [
     "transformers~=4.57.3",
     "accelerate~=1.12.0",
     "imageio[ffmpeg]",
-
+    "lightning~=2.6.0",
     # MoGe
     "MoGe @ git+https://github.com/microsoft/MoGe.git",
 ]

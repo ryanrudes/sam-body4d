@@ -424,11 +424,17 @@ class OfflineApp:
         obj_dict, 
         resized_batch_frames,
         original_size,
+        frame_list=None,
     ):
         """
         Mask generation across the video.
         Currently runs SAM-3 propagation and renders a mask video.
         """
+        if frame_list is not None:
+            frame_name_list = [os.path.basename(fl).split('.')[0] for fl in frame_list]
+        else:
+            frame_name_list = None
+
         # print("[DEBUG] Save Masks.")
         out_w = original_size[0]
         out_h = original_size[1]
@@ -464,8 +470,12 @@ class OfflineApp:
             msk_pil = cv2.resize(msk, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
             msk_pil = Image.fromarray(msk_pil).convert('P')
             msk_pil.putpalette(DAVIS_PALETTE)
-            msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
-            Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
+            if frame_name_list is None:
+                msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
+                Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
+            else:
+                msk_pil.save(os.path.join(MASKS_PATH, f"{frame_name_list[out_frame_idx]}.png"))
+                Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{frame_name_list[out_frame_idx]}.jpg"))
 
     def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None, render=True):
         """
