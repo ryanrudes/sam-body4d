@@ -94,7 +94,10 @@ if __name__ == "__main__":
         mhr_list.sort()
         z = np.load(mhr_list[0], allow_pickle=True)
         zdata = z["data"]
-        num_objs = len(zdata)
+        try:
+            num_objs = len(zdata)
+        except:
+            a = 1
 
         mhr_vertices_list = []
         for j in range(len(mhr_list)):

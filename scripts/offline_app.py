@@ -247,6 +247,7 @@ class OfflineApp:
         )
 
         os.makedirs(f"{self.OUTPUT_DIR}/rendered_frames", exist_ok=True)
+        os.makedirs(f"{self.OUTPUT_DIR}/mhr_params", exist_ok=True)
         for obj_id in self.RUNTIME['out_obj_ids']:
             os.makedirs(f"{self.OUTPUT_DIR}/mesh_4d_individual/{obj_id}", exist_ok=True)
             os.makedirs(f"{self.OUTPUT_DIR}/focal_4d_individual/{obj_id}", exist_ok=True)
@@ -268,6 +269,10 @@ class OfflineApp:
 
         mhr_shape_scale_dict = {}   # each element is a list storing input parameters for mhr_forward
         obj_ratio_dict = {}         # avoid fake completion by obj ratio on the first frame
+
+        # same cam_int across ALL frames
+        input_image = np.array(Image.open(images_list[0])).astype('uint8')
+        cam_int = self.sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
 
         for i in tqdm(range(0, n, batch_size)):
             batch_images = images_list[i:i + batch_size]
@@ -440,7 +445,7 @@ class OfflineApp:
                     occ_dict[obj_id] = [1] * len(batch_masks)
 
             # Process with external mask
-            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict)
+            mask_outputs, id_batch, empty_frame_list = process_image_with_mask(self.sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int)
             
             num_empth_ids = 0
             for frame_id in range(len(batch_images)):
@@ -452,32 +457,33 @@ class OfflineApp:
                 else:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
-                img = cv2.imread(image_path)
-                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                cv2.imwrite(
-                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                    rend_img.astype(np.uint8),
-                )
+                # img = cv2.imread(image_path)
+                # rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                # cv2.imwrite(
+                #     f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                #     rend_img.astype(np.uint8),
+                # )
 
-                # save rendered frames for individual person
-                rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                for ri, rend_img in enumerate(rend_img_list):
-                    cv2.imwrite(
-                        f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
-                        rend_img.astype(np.uint8),
-                    )
-                # save mesh for individual person
-                save_mesh_results(
-                    outputs=mask_output, 
-                    faces=self.sam3_3d_body_model.faces, 
-                    save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
-                    focal_dir = f"{self.OUTPUT_DIR}/focal_4d_individual",
-                    image_path=image_path,
-                    id_current=id_current,
-                )
+                # # save rendered frames for individual person
+                # rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                # for ri, rend_img in enumerate(rend_img_list):
+                #     cv2.imwrite(
+                #         f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                #         rend_img.astype(np.uint8),
+                #     )
+                # # save mesh for individual person
+                # save_mesh_results(
+                #     outputs=mask_output, 
+                #     faces=self.sam3_3d_body_model.faces, 
+                #     save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
+                #     focal_dir = f"{self.OUTPUT_DIR}/focal_4d_individual",
+                #     image_path=image_path,
+                #     id_current=id_current,
+                # )
+                np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
 
-        out_4d_path = os.path.join(self.OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
-        jpg_folder_to_mp4(f"{self.OUTPUT_DIR}/rendered_frames", out_4d_path)
+        # out_4d_path = os.path.join(self.OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
+        # jpg_folder_to_mp4(f"{self.OUTPUT_DIR}/rendered_frames", out_4d_path)
 
         return out_4d_path
 

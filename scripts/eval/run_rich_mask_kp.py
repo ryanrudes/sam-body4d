@@ -20,13 +20,20 @@ def inference(args):
     preproc_data = torch.load(rich_dir / "rich_test_preproc.pt", weights_only=False)
     vids = list(labels.keys())
     vids.sort()
-
+# ParkingLot2_009_burpeejump2
     # inference
     for seq in tqdm(vids):
-        seq_id = seq.split('_')[-1]
+        # seq_id = seq.split('_')[-1]
+        # if str(seq) != 'test/ParkingLot2_009_burpeejump2/cam_04':
+        #     continue
         frame_list = labels[seq]['frame_id']
-        frame_list = [f"{args.data_dir}/{seq}/{fi:05d}_{seq_id}.jpeg" for fi in frame_list]
-        frame_list.sort()
+        frame_name_list = glob.glob(f"{args.data_dir}/{seq}/*.jpeg")
+        frame_name_list.sort()
+
+        frame_list = [frame_name_list[i] for i in frame_list.tolist()]
+
+        # frame_list = [f"{args.data_dir}/{seq}/{fi:05d}_{seq_id}.jpeg" for fi in frame_list]
+        # frame_list.sort()
         
         if not os.path.exists(frame_list[0]):
         # if True:

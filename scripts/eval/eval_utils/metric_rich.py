@@ -175,7 +175,7 @@ class MetricMocap:
 
         avg = camcoord_metrics['pa_mpjpe'].mean()
         print(f"{vid}: {avg}")
-
+# ParkingLot2_009_burpeejump2
         if save_path is not None:
             import csv
             mode = "a" if os.path.exists(save_path) else "w"
@@ -186,7 +186,7 @@ class MetricMocap:
                 writer.writerow([vid, 'pve', camcoord_metrics['pve'].mean()] + list(camcoord_metrics['pve']))
                 writer.writerow([vid, 'accel', camcoord_metrics['accel'].mean()] + list(camcoord_metrics['accel']))
 
-        metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items()}
+        metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items() if k=='pa_mpjpe'or k=='mpjpe' or k=='pve' or k=='accel'}
         print(metrics_avg)
 
         if False:  # global wi3d debug
