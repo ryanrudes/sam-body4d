@@ -6,8 +6,11 @@ conda activate mhr2smpl
 # pip install pymomentum-cpu fails on some envs
 conda install -c conda-forge pymomentum-cpu -y
 pip install scikit-learn smplx mhr tqdm opencv-python einops colorlog
-conda install pytorch3d -c pytorch3d-nightly --no-deps -y
 pip install chumpy --no-build-isolation
+conda install pytorch3d -c pytorch3d-nightly --no-deps -y
+
+pip install -e . --no-build-isolation --no-deps
+
 ```
 
 More info about [PyMomentum](https://facebookresearch.github.io/momentum/pymomentum/user_guide/getting_started).

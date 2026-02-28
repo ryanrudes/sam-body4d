@@ -152,9 +152,14 @@ class MHR(torch.nn.Module):
         ), f"Expected {NUM_IDENTITY_BLENDSHAPES} identity and {NUM_FACE_EXPRESSION_BLENDSHAPES} face expression blendshapes, got {character.blend_shape.shape_vectors.shape[0]}"
 
         n_params = character.parameter_transform.size
-        character = character.with_blend_shape(
-            character.blend_shape
-        )  # update parameter transform to include blendshape coefficients
+        print("[DEBUG] reached before with_blend_shape", flush=True)
+        try:
+            character = character.with_blend_shape(character.blend_shape)
+            print("[DEBUG] reached after with_blend_shape", flush=True)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
         # Assert number of parameters now include blendshape coefficients
         assert character.parameter_transform.size == (
             n_params + NUM_IDENTITY_BLENDSHAPES + NUM_FACE_EXPRESSION_BLENDSHAPES

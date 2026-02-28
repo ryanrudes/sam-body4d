@@ -472,10 +472,10 @@ class OfflineApp:
             msk_pil.putpalette(DAVIS_PALETTE)
             if frame_name_list is None:
                 msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
-                Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
+                # Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
             else:
                 msk_pil.save(os.path.join(MASKS_PATH, f"{frame_name_list[out_frame_idx]}.png"))
-                Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{frame_name_list[out_frame_idx]}.jpg"))
+                # Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{frame_name_list[out_frame_idx]}.jpg"))
 
     def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None, render=True):
         """
@@ -701,16 +701,16 @@ class OfflineApp:
                     mask_output = mask_outputs[frame_id]
                     id_current = id_batch[frame_id]
                 
-                if render:
-                    img = cv2.imread(image_path)
-                    rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                    cv2.imwrite(
-                        f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                        rend_img.astype(np.uint8),
-                    )
+                # if render:
+                #     img = cv2.imread(image_path)
+                #     rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                #     cv2.imwrite(
+                #         f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
+                #         rend_img.astype(np.uint8),
+                #     )
 
                 np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
-                np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)
+                # np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_id.npz", data=id_current)
 
 
 def inference(args):

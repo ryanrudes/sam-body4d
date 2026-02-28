@@ -46,8 +46,8 @@ class RichSmplFullSeqDataset(data.Dataset):
 
         # Load evaluation protocol from WHAM labels
         self.rich_dir = Path(f"{label_path}/hmr4d_support")
-        self.labels = torch.load(self.rich_dir / "rich_test_labels.pt")
-        self.preproc_data = torch.load(self.rich_dir / "rich_test_preproc.pt")
+        self.labels = torch.load(self.rich_dir / "rich_test_labels.pt", weights_only=False)
+        self.preproc_data = torch.load(self.rich_dir / "rich_test_preproc.pt", weights_only=False)
         vids = select_subset(self.labels, vid_presets)
 
         # Setup dataset index
@@ -178,8 +178,8 @@ def select_subset(labels, vid_presets):
 
 
 #
-group_name = "test_datasets/rich"
-base_node = builds(RichSmplFullSeqDataset, vid_presets=None, populate_full_signature=True)
-MainStore.store(name="all", node=base_node, group=group_name)
-MainStore.store(name="easy_to_hard", node=base_node(vid_presets="easytohard"), group=group_name)
-MainStore.store(name="postproc", node=base_node(vid_presets="postproc"), group=group_name)
+# group_name = "test_datasets/rich"
+# base_node = builds(RichSmplFullSeqDataset, vid_presets=None, populate_full_signature=True)
+# MainStore.store(name="all", node=base_node, group=group_name)
+# MainStore.store(name="easy_to_hard", node=base_node(vid_presets="easytohard"), group=group_name)
+# MainStore.store(name="postproc", node=base_node(vid_presets="postproc"), group=group_name)

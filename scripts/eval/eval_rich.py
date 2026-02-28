@@ -21,6 +21,8 @@ from eval_utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
 from eval_utils.std import suppress_stdout_stderr
 from eval_utils.smooth import postprocess_smpl_params
 
+from torch.utils.data import default_collate
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -63,8 +65,8 @@ if __name__ == "__main__":
         save_path = None
 
     # init dataset and metric evaluator
-    dataset_emdb = RichSmplFullSeqDataset(label_path=args.label_path)
-    metric_emdb = MetricMocap(body_model_path=args.body_model_path)
+    dataset_rich = RichSmplFullSeqDataset(label_path=args.label_path)
+    metric_rich = MetricMocap(body_model_path=args.body_model_path)
 
     # init smpl & mhr models for conversion
     mhr_model = MHR.from_files(folder=Path(f"{args.body_model_path}/assets"), lod=1, device=torch.device("cuda"))
@@ -73,8 +75,8 @@ if __name__ == "__main__":
         mhr_model=mhr_model, smpl_model=smpl_model, method="pytorch"
     )
 
-    for i in tqdm(range(len(dataset_emdb)), desc="Processing EMDB-split-1"):
-        meta_data = dataset_emdb[i]
+    for i in tqdm(range(len(dataset_rich)), desc="Processing RICH"):
+        meta_data = dataset_rich[i]
         seq_name, obj_id = meta_data['meta']['vid'], '1'
         for k, v in meta_data.items():
             if isinstance(v, torch.Tensor):
@@ -213,4 +215,14 @@ if __name__ == "__main__":
             smpl_params,
         )
 
-        metric_emdb.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)
+        meta_data = [meta_data]
+        return_dict = {}
+        for k in meta_data[0].keys():
+            if k.startswith("meta"):  # data information, do not batch
+                return_dict[k] = [d[k] for d in meta_data]
+            else:
+                return_dict[k] = default_collate([d[k] for d in meta_data])
+        return_dict["B"] = 1
+
+        # metric_rich.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)
+        metric_rich.evaluate(smpl_params, return_dict, None, None, save_path, None)

@@ -70,6 +70,7 @@ class MetricMocap:
         script_dir = os.path.dirname(script_path)
         self.J_regressor = torch.load(f"{script_dir}/body_model/smpl_neutral_J_regressor.pt")
         self.smplx2smpl = torch.load(f"{script_dir}/body_model/smplx2smpl_sparse.pt")
+        self.smplx = make_smplx("supermotion", body_model_path=body_model_path)
         # self.J_regressor = torch.load("hmr4d/utils/body_model/smpl_neutral_J_regressor.pt")
         # self.smplx2smpl = torch.load("hmr4d/utils/body_model/smplx2smpl_sparse.pt")
         # self.faces_smpl = make_smplx("smpl", body_model_path=body_model_path).faces
@@ -82,7 +83,8 @@ class MetricMocap:
         # self.on_test_epoch_end = self.on_validation_epoch_end = self.on_predict_epoch_end
 
     # ================== Batch-based Computation  ================== #
-    def evaluate(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    def evaluate(self, outputs, batch, mhr_height, smplx_vertices, save_path=None, smplx=None):
+    # def evaluate(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         """The behaviour is the same for val/test/predict"""
         assert batch["B"] == 1
         dataset_id = batch["meta"][0]["dataset_id"]
@@ -90,6 +92,7 @@ class MetricMocap:
             return
 
         # Move to cuda if not
+        self.smplx = self.smplx.cuda()
         for g in ["male", "female", "neutral"]:
             self.smplx_model[g] = self.smplx_model[g].cuda()
         self.J_regressor = self.J_regressor.cuda()
@@ -114,19 +117,40 @@ class MetricMocap:
         target_ay_verts = apply_T_on_points(target_w_verts, T_w2ay)
         target_ay_j3d = torch.matmul(self.J_regressor, target_ay_verts)
 
-        # + Prediction -> Metric
-        # 1. cam
-        pred_smpl_params_incam = outputs["pred_smpl_params_incam"]
-        smpl_out = self.smplx_model["neutral"](**pred_smpl_params_incam)
+        # # + Prediction -> Metric
+        # # 1. cam
+        # pred_smpl_params_incam = outputs["pred_smpl_params_incam"]
+        # smpl_out = self.smplx_model["neutral"](**pred_smpl_params_incam)
+        # pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
+        # pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
+        # offset = pred_c_j3d[..., [1, 2], :].mean(-2, keepdim=True)  # (L, 1, 3)
+
+        # # 2. ay
+        # pred_smpl_params_global = outputs["pred_smpl_params_global"]
+        # smpl_out = self.smplx_model["neutral"](**pred_smpl_params_global)
+        # pred_ay_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
+        # pred_ay_j3d = einsum(self.J_regressor, pred_ay_verts, "j v, l v i -> l j i")
+
+        if smplx is not None:
+            B = outputs["global_orient"].shape[0]
+            # 1. 先保证你已有的都是 contiguous
+            outputs = {k: v.contiguous() for k, v in outputs.items()}
+            # 2. 自动把 smplx 里存在、但 outputs 里没传的 tensor buffer 补进来
+            for k in dir(smplx):
+                if k.startswith("_"):
+                    continue
+                if k in outputs:
+                    continue
+                v = getattr(smplx, k)
+                if hasattr(v, "shape") and v.shape[0] == 1:
+                    outputs[k] = v.expand(B, *v.shape[1:]).contiguous()
+            smpl_out = smplx(**outputs)
+        else:
+            smpl_out = self.smplx_model[g](**outputs)
+
         pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
         pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
-        offset = pred_c_j3d[..., [1, 2], :].mean(-2, keepdim=True)  # (L, 1, 3)
-
-        # 2. ay
-        pred_smpl_params_global = outputs["pred_smpl_params_global"]
-        smpl_out = self.smplx_model["neutral"](**pred_smpl_params_global)
-        pred_ay_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
-        pred_ay_j3d = einsum(self.J_regressor, pred_ay_verts, "j v, l v i -> l j i")
+        del smpl_out  # Prevent OOM
 
         # Metric of current sequence
         batch_eval = {
@@ -139,15 +163,31 @@ class MetricMocap:
         for k in camcoord_metrics:
             self.metric_aggregator[k][vid] = as_np_array(camcoord_metrics[k])
 
-        batch_eval = {
-            "pred_j3d_glob": pred_ay_j3d,
-            "target_j3d_glob": target_ay_j3d,
-            "pred_verts_glob": pred_ay_verts,
-            "target_verts_glob": target_ay_verts,
-        }
-        global_metrics = compute_global_metrics(batch_eval)
-        for k in global_metrics:
-            self.metric_aggregator[k][vid] = as_np_array(global_metrics[k])
+        # batch_eval = {
+        #     "pred_j3d_glob": pred_ay_j3d,
+        #     "target_j3d_glob": target_ay_j3d,
+        #     "pred_verts_glob": pred_ay_verts,
+        #     "target_verts_glob": target_ay_verts,
+        # }
+        # global_metrics = compute_global_metrics(batch_eval)
+        # for k in global_metrics:
+        #     self.metric_aggregator[k][vid] = as_np_array(global_metrics[k])
+
+        avg = camcoord_metrics['pa_mpjpe'].mean()
+        print(f"{vid}: {avg}")
+
+        if save_path is not None:
+            import csv
+            mode = "a" if os.path.exists(save_path) else "w"
+            with open(save_path, mode, newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([vid, 'pa_mpjpe', camcoord_metrics['pa_mpjpe'].mean()] + list(camcoord_metrics['pa_mpjpe']))
+                writer.writerow([vid, 'mpjpe', camcoord_metrics['mpjpe'].mean()] + list(camcoord_metrics['mpjpe']))
+                writer.writerow([vid, 'pve', camcoord_metrics['pve'].mean()] + list(camcoord_metrics['pve']))
+                writer.writerow([vid, 'accel', camcoord_metrics['accel'].mean()] + list(camcoord_metrics['accel']))
+
+        metrics_avg = {k: np.concatenate(list(v.values())).mean() for k, v in self.metric_aggregator.items()}
+        print(metrics_avg)
 
         if False:  # global wi3d debug
             wis3d = make_wis3d(name="debug-metric-global")
