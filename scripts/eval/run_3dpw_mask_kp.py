@@ -201,7 +201,7 @@ def inference(args):
 
             feats_a = [o['feature_cache'] for _, o in outputs_per_framea.items()]
             feats_b = [o['feature_cache'] for _, o in reversed(outputs_per_frameb.items())]
-            np.savez_compressed(os.path.join(args.output_dir, 'feature_cache.npz'), data=np.concatenate(feats_a + feats_b, axis=0))
+            np.savez_compressed(os.path.join(args.output_dir, seq, 'feature_cache.npz'), data=np.concatenate(feats_a + feats_b, axis=0))
 
         # 4. hmr upon masks
 
