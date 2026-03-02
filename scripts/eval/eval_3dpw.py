@@ -200,8 +200,11 @@ if __name__ == "__main__":
                         v[kk] = vv.cuda()
 
         # /home/hmq/projects/hmr/DPoser-X/saves/downtown_rampAndStairs_00_0_tensor_dict.pth
-        if 'downtown_runForBus_01' not in seq_name or obj_id != '0':
+        # if 'downtown_rampAndStairs_00' not in seq_name or obj_id != '0':
+        if 'office_phoneCall_00' not in seq_name or obj_id != '0':
             continue
+        # if 'downtown_runForBus_01' not in seq_name or obj_id != '0':
+        #     continue
 
         point_list = []
 
@@ -417,7 +420,6 @@ if __name__ == "__main__":
         #         )
         #         smpl_params2 = conversion_results.result_parameters
         #     # smpl_vertices = conversion_results.result_vertices
-            
 
         #     del smpl_params2['left_hand_pose']
         #     del smpl_params2['right_hand_pose']
@@ -435,8 +437,14 @@ if __name__ == "__main__":
 
         # torch.save(smpl_params, f'{seq_name}_{obj_id}_tensor_dict.pth')
 
-        smpl_params = torch.load('/home/hmq/projects/hmr/DPoser-X/saves/downtown_runForBus_01_0_tensor_dict.pth')
+        # smpl_params = torch.load('/home/hmq/projects/hmr/DPoser-X/saves/downtown_runForBus_01_0_tensor_dict.pth')
+        # smpl_params = torch.load('/home/hmq/projects/hmr/sam-body4d/downtown_runForBus_01_0_tensor_dict.pth')
+        # downtown_rampAndStairs_00_0_tensor_dict
+        # smpl_params = torch.load('/home/hmq/projects/hmr/DPoser-X/saves/downtown_rampAndStairs_00_0_tensor_dict.pth')
         # smpl_params = torch.load('/home/hmq/projects/hmr/sam-body4d/downtown_rampAndStairs_00_0_tensor_dict.pth')
+        smpl_params = torch.load('/home/hmq/projects/hmr/DPoser-X/saves/office_phoneCall_00_0_tensor_dict.pth')
+        # smpl_params = torch.load('/home/hmq/projects/hmr/sam-body4d/office_phoneCall_00_0_tensor_dict.pth')
+
 
         del smpl_params['left_hand_pose']
         del smpl_params['right_hand_pose']
