@@ -124,13 +124,13 @@ def inference(args):
                         session_id=predictor.RUNTIME['session_id'],
                     )
                 )
-            predictor.save_masks(
-                start_frame_idx=0, 
-                outputs_per_frame=outputs_per_framea, 
-                obj_dict=obj_dicta, 
-                resized_batch_frames=resized_batch_frames[:mid],
-                original_size=(width, height),
-            )
+            # predictor.save_masks(
+            #     start_frame_idx=0, 
+            #     outputs_per_frame=outputs_per_framea, 
+            #     obj_dict=obj_dicta, 
+            #     resized_batch_frames=resized_batch_frames[:mid],
+            #     original_size=(width, height),
+            # )
             # save frame feats
 
 
@@ -191,13 +191,17 @@ def inference(args):
                 )
 
             # 3. save masks
-            predictor.save_masks(
-                start_frame_idx=mid, 
-                outputs_per_frame=outputs_per_frameb, 
-                obj_dict=obj_dictb, 
-                resized_batch_frames=resized_batch_frames[::-1],
-                original_size=(width, height),
-            )
+            # predictor.save_masks(
+            #     start_frame_idx=mid, 
+            #     outputs_per_frame=outputs_per_frameb, 
+            #     obj_dict=obj_dictb, 
+            #     resized_batch_frames=resized_batch_frames[::-1],
+            #     original_size=(width, height),
+            # )
+
+            feats_a = [o['feature_cache'] for _, o in outputs_per_framea.items()]
+            feats_b = [o['feature_cache'] for _, o in reversed(outputs_per_frameb.items())]
+            np.savez_compressed(os.path.join(args.output_dir, 'feature_cache.npz'), data=np.concatenate(feats_a + feats_b, axis=0))
 
         # 4. hmr upon masks
 
