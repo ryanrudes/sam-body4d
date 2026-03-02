@@ -340,6 +340,7 @@ class Sam3VideoInference(Sam3VideoBase):
                         hotstart_removed_obj_ids,
                         suppressed_obj_ids,
                         unconfirmed_obj_ids,
+                        frame_idx=frame_idx,
                     )
 
                     self._cache_frame_outputs(
@@ -433,6 +434,7 @@ class Sam3VideoInference(Sam3VideoBase):
         removed_obj_ids=None,
         suppressed_obj_ids=None,
         unconfirmed_obj_ids=None,
+        frame_idx=None,
     ):
         obj_id_to_mask = out["obj_id_to_mask"]  # low res masks
         curr_obj_ids = sorted(obj_id_to_mask.keys())
@@ -517,6 +519,7 @@ class Sam3VideoInference(Sam3VideoBase):
             "out_boxes_xywh": out_boxes_xywh.cpu().numpy(),
             "out_binary_masks": out_binary_masks.cpu().numpy(),
             "frame_stats": out.get("frame_stats", None),
+            "feature_cache": inference_state["feature_cache"][frame_idx][1]['tracker_backbone_out']['backbone_fpn'][-1].cpu().float().numpy(),  # for confidence
         }
         return outputs
 
@@ -901,7 +904,7 @@ class Sam3VideoInference(Sam3VideoBase):
         out = self._run_single_frame_inference(
             inference_state, frame_idx, reverse=False
         )
-        return frame_idx, self._postprocess_output(inference_state, out)
+        return frame_idx, self._postprocess_output(inference_state, out, frame_idx=frame_idx)
 
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     def forward(self, input: BatchedDatapoint, is_inference: bool = False):

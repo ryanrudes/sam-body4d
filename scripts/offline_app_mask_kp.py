@@ -442,6 +442,8 @@ class OfflineApp:
         os.makedirs(MASKS_PATH, exist_ok=True)
         IMAGE_PATH = os.path.join(self.OUTPUT_DIR, 'painted_images') # for sam3-3d-body
         os.makedirs(IMAGE_PATH, exist_ok=True)
+        FEATS_PATH = os.path.join(self.OUTPUT_DIR, 'feats')  # for confidence
+        os.makedirs(FEATS_PATH, exist_ok=True)
 
         for out_frame_idx, resized_frame in enumerate(resized_batch_frames):
             output = outputs_per_frame.get(out_frame_idx+start_frame_idx, None)
@@ -472,10 +474,12 @@ class OfflineApp:
             msk_pil.putpalette(DAVIS_PALETTE)
             if frame_name_list is None:
                 msk_pil.save(os.path.join(MASKS_PATH, f"{out_frame_idx+start_frame_idx:08d}.png"))
+                np.savez_compressed(os.path.join(FEATS_PATH, f"{out_frame_idx+start_frame_idx:08d}.npz"), x=output['feature_cache'])
                 # Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{out_frame_idx+start_frame_idx:08d}.jpg"))
             else:
                 msk_pil.save(os.path.join(MASKS_PATH, f"{frame_name_list[out_frame_idx]}.png"))
                 # Image.fromarray(img).save(os.path.join(IMAGE_PATH, f"{frame_name_list[out_frame_idx]}.jpg"))
+                np.savez_compressed(os.path.join(FEATS_PATH, f"{frame_name_list[out_frame_idx]}.npz"), x=output['feature_cache'])
 
     def on_4d_generation(self, images_list: str=None, seq_path=None, kps_list=None, box_list=None, render=True):
         """
