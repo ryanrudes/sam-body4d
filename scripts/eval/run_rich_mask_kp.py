@@ -24,8 +24,8 @@ def inference(args):
     # inference
     for seq in tqdm(vids):
         # seq_id = seq.split('_')[-1]
-        # if str(seq) != 'test/ParkingLot2_009_burpeejump2/cam_04':
-        #     continue
+        if str(seq) != 'test/Gym_010_cooking1/cam_01':
+            continue
         frame_list = labels[seq]['frame_id']
         frame_name_list = glob.glob(f"{args.data_dir}/{seq}/*.jpeg")
         frame_name_list.sort()

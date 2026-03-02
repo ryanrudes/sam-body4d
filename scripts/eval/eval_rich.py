@@ -227,5 +227,8 @@ if __name__ == "__main__":
                 return_dict[k] = default_collate([d[k] for d in meta_data])
         return_dict["B"] = 1
 
+        seq_name = seq_name.split('/')[0]
+        torch.save(smpl_params, f'{seq_name}_{obj_id}_tensor_dict.pth')
         # metric_rich.evaluate(smpl_params, meta_data, None, None, save_path, smpl_model)
         metric_rich.evaluate(smpl_params, return_dict, None, None, save_path, None)
+        # metric_3dpw.evaluate(smpl_params, meta_data, None, None, save_path, None)

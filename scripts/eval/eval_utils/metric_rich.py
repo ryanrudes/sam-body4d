@@ -120,9 +120,9 @@ class MetricMocap:
         # # + Prediction -> Metric
         # # 1. cam
         # pred_smpl_params_incam = outputs["pred_smpl_params_incam"]
-        # smpl_out = self.smplx_model["neutral"](**pred_smpl_params_incam)
-        # pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
-        # pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
+        smpl_out = self.smplx_model["neutral"](**outputs)
+        pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
+        pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
         # offset = pred_c_j3d[..., [1, 2], :].mean(-2, keepdim=True)  # (L, 1, 3)
 
         # # 2. ay
@@ -131,25 +131,25 @@ class MetricMocap:
         # pred_ay_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
         # pred_ay_j3d = einsum(self.J_regressor, pred_ay_verts, "j v, l v i -> l j i")
 
-        if smplx is not None:
-            B = outputs["global_orient"].shape[0]
-            # 1. 先保证你已有的都是 contiguous
-            outputs = {k: v.contiguous() for k, v in outputs.items()}
-            # 2. 自动把 smplx 里存在、但 outputs 里没传的 tensor buffer 补进来
-            for k in dir(smplx):
-                if k.startswith("_"):
-                    continue
-                if k in outputs:
-                    continue
-                v = getattr(smplx, k)
-                if hasattr(v, "shape") and v.shape[0] == 1:
-                    outputs[k] = v.expand(B, *v.shape[1:]).contiguous()
-            smpl_out = smplx(**outputs)
-        else:
-            smpl_out = self.smplx_model[g](**outputs)
+        # if smplx is not None:
+        #     B = outputs["global_orient"].shape[0]
+        #     # 1. 先保证你已有的都是 contiguous
+        #     outputs = {k: v.contiguous() for k, v in outputs.items()}
+        #     # 2. 自动把 smplx 里存在、但 outputs 里没传的 tensor buffer 补进来
+        #     for k in dir(smplx):
+        #         if k.startswith("_"):
+        #             continue
+        #         if k in outputs:
+        #             continue
+        #         v = getattr(smplx, k)
+        #         if hasattr(v, "shape") and v.shape[0] == 1:
+        #             outputs[k] = v.expand(B, *v.shape[1:]).contiguous()
+        #     smpl_out = smplx(**outputs)
+        # else:
+        #     smpl_out = self.smplx_model["neutral"](**outputs)
 
-        pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
-        pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
+        # pred_c_verts = torch.stack([torch.matmul(self.smplx2smpl, v_) for v_ in smpl_out.vertices])
+        # pred_c_j3d = einsum(self.J_regressor, pred_c_verts, "j v, l v i -> l j i")
         del smpl_out  # Prevent OOM
 
         # Metric of current sequence
