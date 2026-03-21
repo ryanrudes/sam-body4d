@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,13 +15,12 @@ from huggingface_hub.utils import GatedRepoError, HfHubHTTPError, RepositoryNotF
 
 
 # -------------------------
-# Defaults (edit if needed)
+# Defaults
 # -------------------------
-DEFAULT_RELEASE_TAG = "v0.1.0"
 DEFAULT_OWNER_REPO = "gaomingqi/sam-body4d"
 
 TEMPLATE_ASSET_NAME = "config.template.yaml"
-GENERATED_CONFIG_PATH = "configs/body4d.yaml"  # your final runtime config
+GENERATED_CONFIG_PATH = "configs/body4d.yaml"
 
 
 # -------------------------
@@ -31,6 +31,14 @@ class URLFile:
     name: str
     url: str
     rel_out: str  # relative to ckpt_root
+
+
+@dataclass(frozen=True)
+class URLZipDir:
+    name: str
+    url: str
+    rel_out_zip: str       # relative to ckpt_root
+    expected_dir_rel: str  # relative to ckpt_root
 
 
 @dataclass(frozen=True)
@@ -72,15 +80,19 @@ def complete_marker(dir_path: Path) -> Path:
 
 
 def dir_complete(dir_path: Path) -> bool:
-    # "exists" for repo dirs means: non-empty + has .complete marker
-    return dir_path.exists() and dir_path.is_dir() and any(dir_path.iterdir()) and complete_marker(dir_path).exists()
+    return (
+        dir_path.exists()
+        and dir_path.is_dir()
+        and any(dir_path.iterdir())
+        and complete_marker(dir_path).exists()
+    )
 
 
 # -------------------------
 # GitHub Release template
 # -------------------------
-def release_template_url(owner_repo: str, tag: str) -> str:
-    return f"https://github.com/{owner_repo}/releases/download/{tag}/{TEMPLATE_ASSET_NAME}"
+def release_template_url(owner_repo: str) -> str:
+    return f"https://github.com/{owner_repo}/releases/latest/download/{TEMPLATE_ASSET_NAME}"
 
 
 def download_url_atomic(url: str, out_path: Path, name: str) -> None:
@@ -88,7 +100,6 @@ def download_url_atomic(url: str, out_path: Path, name: str) -> None:
     Atomic-ish URL download:
       - downloads to out_path + ".part"
       - renames to out_path on success
-    This prevents half-downloaded files being treated as "exists".
     """
     ensure_dir(out_path.parent)
 
@@ -98,7 +109,6 @@ def download_url_atomic(url: str, out_path: Path, name: str) -> None:
 
     tmp = out_path.with_suffix(out_path.suffix + ".part")
     if tmp.exists():
-        # leftover from an interrupted run
         try:
             tmp.unlink()
         except Exception:
@@ -113,6 +123,56 @@ def download_url_atomic(url: str, out_path: Path, name: str) -> None:
 
     tmp.replace(out_path)
     print(f"[OK]   {name}")
+
+
+def download_and_extract_zip_atomic(item: URLZipDir, ckpt_root: Path) -> bool:
+    out_zip = ckpt_root / item.rel_out_zip
+    expected_dir = ckpt_root / item.expected_dir_rel
+
+    if dir_complete(expected_dir):
+        print(f"[SKIP] {item.name}")
+        return True
+
+    ensure_dir(out_zip.parent)
+    ensure_dir(expected_dir.parent)
+
+    tmp_zip = out_zip.with_suffix(out_zip.suffix + ".part")
+    if tmp_zip.exists():
+        try:
+            tmp_zip.unlink()
+        except Exception:
+            pass
+
+    try:
+        print(f"[DL]   {item.name}")
+        with urllib.request.urlopen(item.url) as r, open(tmp_zip, "wb") as f:
+            f.write(r.read())
+
+        if not file_ok(tmp_zip):
+            raise RuntimeError(f"Downloaded zip is empty: {tmp_zip}")
+
+        tmp_zip.replace(out_zip)
+
+        print(f"[UNZIP] {item.name}")
+        with zipfile.ZipFile(out_zip, "r") as zf:
+            zf.extractall(ckpt_root)
+
+        if not expected_dir.exists() or not expected_dir.is_dir() or not any(expected_dir.iterdir()):
+            raise RuntimeError(f"Expected extracted directory is missing or empty: {expected_dir}")
+
+        complete_marker(expected_dir).write_text("ok\n", encoding="utf-8")
+
+        try:
+            out_zip.unlink()
+        except Exception:
+            pass
+
+        print(f"[OK]   {item.name}")
+        return True
+
+    except Exception as e:
+        print(f"[BLOCKED] {item.name}: download/extract failed ({e})")
+        return False
 
 
 def generate_config_from_template(template_path: Path, out_path: Path, ckpt_root: Path, force: bool) -> None:
@@ -193,11 +253,6 @@ def hf_download_file(item: HFFile, ckpt_root: Path, token: Optional[str]) -> boo
 
 
 def hf_download_repo_dir(item: HFRepoDir, ckpt_root: Path, token: Optional[str]) -> bool:
-    """
-    Robust "exist" check for directories:
-      - if dir exists but missing .complete => treat as partial and re-download/continue
-      - after successful snapshot_download => write .complete
-    """
     out_dir = ckpt_root / item.rel_out_dir
     ensure_dir(out_dir)
 
@@ -205,7 +260,6 @@ def hf_download_repo_dir(item: HFRepoDir, ckpt_root: Path, token: Optional[str])
         print(f"[SKIP] {item.name}")
         return True
 
-    # If directory exists but not complete, we keep it and let snapshot_download resume.
     try:
         print(f"[DL]   {item.name} (repo dir)")
         snapshot_download(
@@ -216,7 +270,6 @@ def hf_download_repo_dir(item: HFRepoDir, ckpt_root: Path, token: Optional[str])
             token=token,
             resume_download=True,
         )
-        # Mark completion
         complete_marker(out_dir).write_text("ok\n", encoding="utf-8")
         print(f"[OK]   {item.name}")
         return True
@@ -239,19 +292,29 @@ def print_manual_hints(ckpt_root: Path) -> None:
     print("  diffusion-vas-amodal-segmentation/  (directory)")
     print("  diffusion-vas-content-completion/  (directory)")
     print("  moge-2-vitl-normal/model.pt")
-    print("  depth_anything_v2_vitl.pth\n")
+    print("  depth_anything_v2_vitl.pth")
+    print("  assets/  (directory extracted from MHR assets.zip)\n")
     print("Rerun the setup script after placing files; existing files will be skipped.\n")
 
 
 # -------------------------
-# Specs (edit here)
+# Specs
 # -------------------------
-def build_specs() -> tuple[list[URLFile], list[HFRepoDir], list[HFFile]]:
+def build_specs() -> tuple[list[URLFile], list[URLZipDir], list[HFRepoDir], list[HFFile]]:
     url_files = [
         URLFile(
             name="Depth Anything v2 (vitl)",
             url="https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true",
             rel_out="depth_anything_v2_vitl.pth",
+        ),
+    ]
+
+    url_zip_dirs = [
+        URLZipDir(
+            name="MHR assets",
+            url="https://github.com/facebookresearch/MHR/releases/download/v1.0.0/assets.zip",
+            rel_out_zip="assets.zip",
+            expected_dir_rel="assets",
         ),
     ]
 
@@ -308,7 +371,7 @@ def build_specs() -> tuple[list[URLFile], list[HFRepoDir], list[HFFile]]:
         ),
     ]
 
-    return url_files, repo_dirs, hf_files
+    return url_files, url_zip_dirs, repo_dirs, hf_files
 
 
 # -------------------------
@@ -318,7 +381,6 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt-root", type=str, default=None, help="Checkpoint root (default: ./checkpoints)")
     ap.add_argument("--owner-repo", type=str, default=DEFAULT_OWNER_REPO, help="GitHub owner/repo for Releases")
-    ap.add_argument("--release-tag", type=str, default=DEFAULT_RELEASE_TAG, help="Release tag (e.g., v0.1.0)")
     ap.add_argument("--no-force", dest="force", action="store_false",
                     help="Do not overwrite generated configs/body4d.yaml")
     ap.set_defaults(force=True)
@@ -329,20 +391,21 @@ def main() -> None:
     ckpt_root = expand_abs(args.ckpt_root) if args.ckpt_root else expand_abs(str(repo_root / "checkpoints"))
     ensure_dir(ckpt_root)
 
-    # 1) Download template config from Release
-    tmpl_url = release_template_url(args.owner_repo, args.release_tag)
+    # 1) Download template config from latest GitHub Release
+    tmpl_url = release_template_url(args.owner_repo)
     local_tmpl = repo_root / "configs" / TEMPLATE_ASSET_NAME
     download_url_atomic(tmpl_url, local_tmpl, "Config template (release)")
 
-    # 2) Generate configs/body4d.yaml (force by default)
+    # 2) Generate configs/body4d.yaml
     out_cfg = repo_root / GENERATED_CONFIG_PATH
     generate_config_from_template(local_tmpl, out_cfg, ckpt_root, force=args.force)
 
     # 3) Download all specs
-    url_files, repo_dirs, hf_files = build_specs()
+    url_files, url_zip_dirs, repo_dirs, hf_files = build_specs()
 
-    # 3.1 URL files (atomic)
     ok = True
+
+    # 3.1 URL files
     for it in url_files:
         try:
             download_url_atomic(it.url, ckpt_root / it.rel_out, it.name)
@@ -350,7 +413,11 @@ def main() -> None:
             ok = False
             print(f"[BLOCKED] {it.name}: download failed ({e})")
 
-    # 3.2 Non-gated HF downloads (token optional)
+    # 3.2 URL zip dirs
+    for it in url_zip_dirs:
+        ok &= download_and_extract_zip_atomic(it, ckpt_root)
+
+    # 3.3 Non-gated HF downloads
     token_cached = get_cached_hf_token()
 
     for it in repo_dirs:
@@ -360,7 +427,7 @@ def main() -> None:
         if not it.gated:
             ok &= hf_download_file(it, ckpt_root, token_cached)
 
-    # 3.3 Gated HF downloads
+    # 3.4 Gated HF downloads
     token = maybe_prompt_token(args.prompt_hf_token)
     ok_gated = True
     for it in hf_files:
@@ -374,6 +441,7 @@ def main() -> None:
         print("Setup finished. 🎉")
     else:
         print("Setup finished with some blocked downloads. See messages above.")
+
 
 if __name__ == "__main__":
     main()

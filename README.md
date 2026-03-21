@@ -62,6 +62,15 @@ https://pytorch.org/get-started/previous-versions/
 pip install -e .
 ```
 
+#### 4. (Optional) MHR → SMPL-X Conversion Backend
+
+If you need MHR → SMPL-X conversion, run this once:
+
+```bash
+bash scripts/install_mhr_env.sh
+```
+
+This installs a separate backend environment (`mhr2smpl`) for MHR-based conversion. Since the official MHR dependencies (e.g., `pymomentum`) are hard to keep compatible with the main SAM-Body4D environment, the backend is isolated to keep `body4d` clean and stable. You do not need to switch environments manually; the code will automatically invoke the backend environment when needed.
 
 ## 🚀 Run the Demo
 
@@ -89,13 +98,14 @@ python app.py
 ```
 #### Manual checkpoint setup (optional)
 
-If you prefer to download checkpoints manually ([SAM 3](https://huggingface.co/facebook/sam3), [SAM 3D Body](https://huggingface.co/facebook/sam-3d-body-dinov3), [MoGe-2](https://huggingface.co/Ruicheng/moge-2-vitl-normal), [Diffusion-VAS](https://github.com/Kaihua-Chen/diffusion-vas?tab=readme-ov-file#download-checkpoints), [Depth-Anything V2](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true)), please place them under the directory with the following structure:
+If you prefer to download checkpoints manually ([SAM 3](https://huggingface.co/facebook/sam3), [SAM 3D Body](https://huggingface.co/facebook/sam-3d-body-dinov3), [MoGe-2](https://huggingface.co/Ruicheng/moge-2-vitl-normal), [Diffusion-VAS](https://github.com/Kaihua-Chen/diffusion-vas?tab=readme-ov-file#download-checkpoints), [Depth-Anything V2](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true), [MHR assets](https://github.com/facebookresearch/MHR/releases/download/v1.0.0/assets.zip)), please place them under the directory with the following structure:
 ```
 ${CKPT_ROOT}/
-├── sam3/                                
+├── sam3/
 │   └── sam3.pt
 ├── sam-3d-body-dinov3/
 │   ├── model.ckpt
+│   ├── model_config.yaml
 │   └── assets/
 │       └── mhr_model.pt
 ├── moge-2-vitl-normal/
@@ -104,7 +114,9 @@ ${CKPT_ROOT}/
 │   └── (directory contents)
 ├── diffusion-vas-content-completion/
 │   └── (directory contents)
-└── depth_anything_v2_vitl.pth
+├── depth_anything_v2_vitl.pth
+└── assets/
+    └── (contents extracted from MHR assets.zip)
 ```
 After placing the files correctly, you can run the setup script again.
 Existing files will be detected and skipped automatically.
