@@ -30,6 +30,7 @@ dependencies = [
     "transformers~=4.57.3",
     "accelerate~=1.12.0",
     "imageio[ffmpeg]",
+    "smplx~=0.1.28",
 
     # MoGe
     "MoGe @ git+https://github.com/microsoft/MoGe.git",

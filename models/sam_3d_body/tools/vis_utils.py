@@ -38,7 +38,9 @@ def visualize_sample(img_cv2, outputs, faces, id_current):
 
 	return rend_img
 
-def visualize_sample_together(img_cv2, outputs, faces, id_current):
+def visualize_sample_together(img_cv2, outputs, faces, id_current, num_vertices=18439):
+	# 18439: mhr
+	# 6843: smplx
 	# Render everything together
 	img_mesh = img_cv2.copy()
 	img_mesh = np.ones_like(img_mesh) * 255
@@ -67,7 +69,7 @@ def visualize_sample_together(img_cv2, outputs, faces, id_current):
 	all_faces = np.concatenate(all_faces, axis=0)
 
 	# Pull out a fake translation; take the closest two
-	fake_pred_cam_t = (np.max(all_pred_vertices[-2*18439:], axis=0) + np.min(all_pred_vertices[-2*18439:], axis=0)) / 2
+	fake_pred_cam_t = (np.max(all_pred_vertices[-2*num_vertices:], axis=0) + np.min(all_pred_vertices[-2*num_vertices:], axis=0)) / 2
 	all_pred_vertices = all_pred_vertices - fake_pred_cam_t
 	
 	# Render front view

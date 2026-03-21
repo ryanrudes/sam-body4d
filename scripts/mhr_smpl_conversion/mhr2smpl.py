@@ -112,8 +112,8 @@ def mhr2smpl(body_model_path, mhr_param_path):
         with suppress_stdout_stderr():
             conversion_results = converter.convert_mhr2smpl(
                 mhr_vertices=mhr_vertices,
-                single_identity=True,
-                is_tracking=True,
+                single_identity=False,
+                is_tracking=False,
                 return_smpl_meshes=False,
                 return_smpl_parameters=True,
                 return_smpl_vertices=False,
@@ -124,8 +124,7 @@ def mhr2smpl(body_model_path, mhr_param_path):
 
         smpl_params = postprocess_smpl_params(smpl_params)
 
-        for frame_id in empty_ids:
-            smpl_params[frame_id] = None
+        smpl_params['empty_ids'] = empty_ids
 
         smpl_dict[obj_id] = smpl_params
 
@@ -138,14 +137,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--body_model_path",
         type=str,
-        required=True,
+        default="/home/data/hmq/checkpoints/sam-body4d",
+        # required=True,
         help="Path to body model root, e.g. /path/to/models",
     )
 
     parser.add_argument(
         "--mhr_path",
         type=str,
-        required=True,
+        default="/home/hmq/projects/hmr/sam-body4d/outputs/20260322_023212_319_b0599abc/mhr_params",
+        # required=True,
         help="Path to MHR params directory",
     )
 
@@ -164,7 +165,7 @@ if __name__ == "__main__":
     save_path = (
         args.save_path
         if args.save_path is not None
-        else os.path.join(os.path.dirname(mhr_path), "smplx_params.pt")
+        else os.path.join(os.path.dirname(mhr_path), "smplx_params.npz")
     )
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -173,6 +174,13 @@ if __name__ == "__main__":
         body_model_path=body_model_path,
         mhr_param_path=mhr_path,
     )
-    torch.save(smpl_dict, save_path)
-
-    print(f"Saved to: {save_path}")
+    flat_dict = {}
+    for obj_id, param_dict in smpl_dict.items():
+        for param_name, value in param_dict.items():
+            key = f"{obj_id}::{param_name}"
+            if isinstance(value, torch.Tensor):
+                flat_dict[key] = value.detach().cpu().numpy()
+            else:
+                flat_dict[key] = np.asarray(value)
+    np.savez_compressed(save_path, **flat_dict)
+    print(f"SMPLX parameters saved to: {save_path}")

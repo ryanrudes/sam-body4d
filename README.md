@@ -60,6 +60,8 @@ https://pytorch.org/get-started/previous-versions/
 #### 3. Install Dependencies
 ```
 pip install -e .
+python -m pip install --no-build-isolation --no-deps \
+  "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47"
 ```
 
 #### 4. (Optional) MHR → SMPL-X Conversion Backend
@@ -96,10 +98,12 @@ python scripts/setup.py --ckpt-root /path/to/checkpoints
 ```bash
 python app.py
 ```
+
 #### Manual checkpoint setup (optional)
 
 If you prefer to download checkpoints manually ([SAM 3](https://huggingface.co/facebook/sam3), [SAM 3D Body](https://huggingface.co/facebook/sam-3d-body-dinov3), [MoGe-2](https://huggingface.co/Ruicheng/moge-2-vitl-normal), [Diffusion-VAS](https://github.com/Kaihua-Chen/diffusion-vas?tab=readme-ov-file#download-checkpoints), [Depth-Anything V2](https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth?download=true), [MHR assets](https://github.com/facebookresearch/MHR/releases/download/v1.0.0/assets.zip)), please place them under the directory with the following structure:
-```
+
+```text
 ${CKPT_ROOT}/
 ├── sam3/
 │   └── sam3.pt
@@ -115,9 +119,21 @@ ${CKPT_ROOT}/
 ├── diffusion-vas-content-completion/
 │   └── (directory contents)
 ├── depth_anything_v2_vitl.pth
-└── assets/
-    └── (contents extracted from MHR assets.zip)
+├── assets/
+│   └── (contents extracted from MHR assets.zip)
+└── smplx/
+    ├── SMPLX_NEUTRAL.npz
+    └── SMPLX_NEUTRAL.pkl
 ```
+If you plan to use MHR → SMPL-X conversion, please also manually download the SMPL-X model files and place them under `${CKPT_ROOT}/smplx/` as shown above.  
+The required files are:
+
+- `SMPLX_NEUTRAL.npz`
+- `SMPLX_NEUTRAL.pkl`
+
+These files are **not redistributed** in this repository and must be obtained manually from the official SMPL-X website after registration:
+https://smpl-x.is.tue.mpg.de/
+
 After placing the files correctly, you can run the setup script again.
 Existing files will be detected and skipped automatically.
 

@@ -10,6 +10,8 @@ sys.path.append(os.path.join(top_dir, 'models', 'diffusion_vas'))
 
 import uuid
 from datetime import datetime
+import subprocess
+from pathlib import Path
 
 def gen_id():
     t = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -147,6 +149,8 @@ class OfflineApp:
         self.RUNTIME['completion_resolution'] = self.CONFIG.completion.get('completion_resolution', [512, 1024])
         self.RUNTIME['smpl_export'] = self.CONFIG.runtime.get('smpl_export', False)
         self.RUNTIME['bboxes'] = None
+        self.RUNTIME['mhr2smpl'] = self.CONFIG.mhr_2_smplx.get('enable', True)
+        self.RUNTIME['mhr_assets'] = self.CONFIG.mhr_2_smplx.get('assets_path', '')
 
     def on_mask_generation(self, video_path: str=None, start_frame_idx: int = 0, max_frame_num_to_track: int = 1800):
         """
@@ -247,6 +251,8 @@ class OfflineApp:
         )
 
         os.makedirs(f"{self.OUTPUT_DIR}/rendered_frames", exist_ok=True)
+        if self.RUNTIME['mhr2smpl']:
+            os.makedirs(f"{self.OUTPUT_DIR}/mhr_params", exist_ok=True)
         for obj_id in self.RUNTIME['out_obj_ids']:
             os.makedirs(f"{self.OUTPUT_DIR}/mesh_4d_individual/{obj_id}", exist_ok=True)
             os.makedirs(f"{self.OUTPUT_DIR}/focal_4d_individual/{obj_id}", exist_ok=True)
@@ -452,32 +458,119 @@ class OfflineApp:
                 else:
                     mask_output = mask_outputs[frame_id-num_empth_ids]
                     id_current = id_batch[frame_id-num_empth_ids]
-                img = cv2.imread(image_path)
-                rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                cv2.imwrite(
-                    f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
-                    rend_img.astype(np.uint8),
-                )
-
-                # save rendered frames for individual person
-                rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
-                for ri, rend_img in enumerate(rend_img_list):
+                
+                # mhr2smpl-x
+                if self.RUNTIME['mhr2smpl']:
+                    np.savez_compressed(f"{self.OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
+                else:   
+                # save mhr mesh & rendered frames
+                    img = cv2.imread(image_path)
+                    rend_img = visualize_sample_together(img, mask_output, self.sam3_3d_body_model.faces, id_current)
                     cv2.imwrite(
-                        f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                        f"{self.OUTPUT_DIR}/rendered_frames/{os.path.basename(image_path)[:-4]}.jpg",
                         rend_img.astype(np.uint8),
                     )
-                # save mesh for individual person
-                save_mesh_results(
-                    outputs=mask_output, 
-                    faces=self.sam3_3d_body_model.faces, 
-                    save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
-                    focal_dir = f"{self.OUTPUT_DIR}/focal_4d_individual",
-                    image_path=image_path,
-                    id_current=id_current,
-                )
+                    # save mesh for individual person
+                    save_mesh_results(
+                        outputs=mask_output, 
+                        faces=self.sam3_3d_body_model.faces, 
+                        save_dir=f"{self.OUTPUT_DIR}/mesh_4d_individual",
+                        focal_dir = f"{self.OUTPUT_DIR}/focal_4d_individual",
+                        image_path=image_path,
+                        id_current=id_current,
+                    )
 
-        out_4d_path = os.path.join(self.OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
-        jpg_folder_to_mp4(f"{self.OUTPUT_DIR}/rendered_frames", out_4d_path)
+                    # # save rendered frames for individual person
+                    # rend_img_list = visualize_sample(img, mask_output, self.sam3_3d_body_model.faces, id_current)
+                    # for ri, rend_img in enumerate(rend_img_list):
+                    #     cv2.imwrite(
+                    #         f"{self.OUTPUT_DIR}/rendered_frames_individual/{ri+1}/{os.path.basename(image_path)[:-4]}_{ri+1}.jpg",
+                    #         rend_img.astype(np.uint8),
+                    #     )
+                
+        # mhr2smpl
+        if RUNTIME['mhr2smpl']:
+            from utils.painter import color_list
+            backend_script = str((Path(__file__).resolve().parent / "scripts" / "mhr_smpl_conversion" / "mhr2smpl.py"))
+            cmd = [
+                "conda",
+                "run",
+                "--no-capture-output",
+                "-n",
+                "mhr2smpl",
+                "python",
+                str(backend_script),
+                "--body_model_path",
+                RUNTIME['mhr_assets'].removesuffix("/assets"),
+                "--mhr_path",
+                f"{OUTPUT_DIR}/mhr_params",
+            ]
+            print("MHR -> SMPL-X:")
+            print(" ".join(cmd))
+            subprocess.run(cmd, check=True)
+
+            # load smple results and save meshes and render frames
+            data = np.load(f"{OUTPUT_DIR}/smplx_params.npz")
+            smpl_dict = {}
+            empty_ids = []
+            for key in data.files:
+                obj_id, param_name = key.split("::", 1)
+                if param_name == "empty_ids":
+                    empty_ids = data[key].tolist()
+                    continue
+                if obj_id not in smpl_dict:
+                    smpl_dict[obj_id] = {}
+                smpl_dict[obj_id][param_name] = torch.from_numpy(data[key]).to(device)  # 如果你想保留成 numpy，就去掉这一行的 torch.from_numpy
+
+            print("Save SMPL-X meshes:")
+            smpl_model = smplx.SMPLX(
+                model_path=os.path.join(RUNTIME['mhr_assets'].removesuffix("/assets"), "smplx"),
+                gender="neutral",
+                batch_size=len(images_list),
+            ).to(device)
+            smpl_vertices = {}
+            print(smpl_dict.keys())
+            for obj_id, params in smpl_dict.items():
+                human_vertices = smpl_model(**params).vertices.detach().cpu()
+                smpl_vertices[int(obj_id)] = human_vertices
+
+                images = []
+                for p in images_list:
+                    img = Image.open(p).convert("RGB")  # 确保 3 通道
+                    img_np = np.array(img, dtype=np.uint8)  # H x W x 3, 0-255
+                    images.append(img_np)
+
+                # stack 成 N x H x W x 3
+                images = np.stack(images, axis=0)
+
+                render_dict = {
+                    "K": cam_int,  # only support batch size 1
+                    "faces": smpl_model.faces,
+                    "verts": human_vertices,
+                    "background": images,
+                }
+                img_overlay = simple_render_mesh_background(render_dict, colors=color_list[int(obj_id)+4])
+
+                for eid in empty_ids:
+                    img_overlay[eid] = images[eid]  # empty frames, show original images
+
+                for frame_id, image_path in enumerate(images_list):
+                    Image.fromarray(img_overlay[frame_id]).save(f"{OUTPUT_DIR}/rendered_frames_individual/{obj_id}/{os.path.basename(image_path)[:-4]}_{obj_id}.jpg")
+                #     save_mesh_results(
+                #         outputs=mask_output, 
+                #         faces=smpl_model.faces, 
+                #         save_dir=f"{OUTPUT_DIR}/mesh_4d_individual",
+                #         focal_dir = f"{OUTPUT_DIR}/focal_4d_individual",
+                #         image_path=image_path,
+                #         id_current=id_current,
+                #     )
+
+
+            out_4d_path = os.path.join(OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
+            jpg_folder_to_mp4(f"{OUTPUT_DIR}/rendered_frames_individual/{obj_id}", out_4d_path, fps=RUNTIME['video_fps'])
+        else:
+            out_4d_path = os.path.join(OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
+            jpg_folder_to_mp4(f"{OUTPUT_DIR}/rendered_frames", out_4d_path, fps=RUNTIME['video_fps'])
 
         return out_4d_path
 
