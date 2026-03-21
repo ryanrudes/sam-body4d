@@ -9,6 +9,7 @@ sys.path.append(os.path.join(current_dir, 'models', 'diffusion_vas'))
 
 import uuid
 from datetime import datetime
+import subprocess
 
 def gen_id():
     t = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -26,6 +27,7 @@ import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
 from omegaconf import OmegaConf
+from pathlib import Path
 
 from utils import draw_point_marker, mask_painter, images_to_mp4, DAVIS_PALETTE, jpg_folder_to_mp4, is_super_long_or_wide, keep_largest_component, is_skinny_mask, bbox_from_mask, gpu_profile, resize_mask_with_unique_label
 
@@ -806,6 +808,7 @@ def on_4d_generation(video_path: str):
     )
 
     os.makedirs(f"{OUTPUT_DIR}/rendered_frames", exist_ok=True)
+    os.makedirs(f"{OUTPUT_DIR}/mhr_params", exist_ok=True)
     for obj_id in RUNTIME['out_obj_ids']:
         os.makedirs(f"{OUTPUT_DIR}/mesh_4d_individual/{obj_id}", exist_ok=True)
         os.makedirs(f"{OUTPUT_DIR}/focal_4d_individual/{obj_id}", exist_ok=True)
@@ -980,22 +983,24 @@ def on_4d_generation(video_path: str):
             for obj_id in RUNTIME['out_obj_ids']:
                 occ_dict[obj_id] = [1] * len(batch_masks)
 
-        # # Process with external mask
-        # print("Running FOV estimator ...")
-        # input_image = np.array(Image.open(batch_images[0])).astype('uint8')
-        # cam_int = sam3_3d_body_model.fov_estimator.get_cam_intrinsics(input_image)
+        # run sam3-3d-body model and render results
         mask_outputs, id_batch, empty_frame_list = process_image_with_mask(sam3_3d_body_model, batch_images, batch_masks, idx_path, idx_dict, mhr_shape_scale_dict, occ_dict, cam_int=cam_int, iou_dict=iou_dict, predictor=predictor)
 
-        num_empth_ids = 0
+        # render frames
+        num_empty_ids = 0
         for frame_id in range(len(batch_images)):
             image_path = batch_images[frame_id]
             if frame_id in empty_frame_list:
                 mask_output = None
                 id_current = None
-                num_empth_ids += 1
+                num_empty_ids += 1
             else:
-                mask_output = mask_outputs[frame_id-num_empth_ids]
-                id_current = id_batch[frame_id-num_empth_ids]
+                mask_output = mask_outputs[frame_id-num_empty_ids]
+                id_current = id_batch[frame_id-num_empty_ids]
+            
+            # mhr2smpl-x
+            np.savez_compressed(f"{OUTPUT_DIR}/mhr_params/{os.path.basename(image_path)[:-4]}_data.npz", data=mask_output)
+            
             img = cv2.imread(image_path)
             rend_img = visualize_sample_together(img, mask_output, sam3_3d_body_model.faces, id_current)
             cv2.imwrite(
@@ -1018,6 +1023,27 @@ def on_4d_generation(video_path: str):
                 image_path=image_path,
                 id_current=id_current,
             )
+
+    # mhr2smpl
+    backend_script = str((Path(__file__).resolve().parent / "scripts" / "mhr_smpl_conversion" / "mhr2smpl.py"))
+    cmd = [
+        "conda",
+        "run",
+        "--no-capture-output",
+        "-n",
+        "mhr2smpl",
+        "python",
+        str(backend_script),
+        "--body_model_path",
+        "/home/data/hmq/datasets/hmr/models",
+        "--mhr_path",
+        f"{OUTPUT_DIR}/mhr_params",
+    ]
+
+    print("Running:")
+    print(" ".join(cmd))
+
+    subprocess.run(cmd, check=True)
 
     out_4d_path = os.path.join(OUTPUT_DIR, f"4d_{time.time():.0f}.mp4")
     jpg_folder_to_mp4(f"{OUTPUT_DIR}/rendered_frames", out_4d_path, fps=RUNTIME['video_fps'])
