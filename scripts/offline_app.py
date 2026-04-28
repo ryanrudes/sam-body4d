@@ -8,6 +8,9 @@ sys.path.append(top_dir)
 sys.path.append(os.path.join(top_dir, 'models', 'sam_3d_body'))
 sys.path.append(os.path.join(top_dir, 'models', 'diffusion_vas'))
 
+if sys.platform == "darwin":
+    os.environ.setdefault("PYOPENGL_PLATFORM", "pyglet")
+
 import uuid
 from datetime import datetime
 
@@ -59,6 +62,15 @@ elif device.type == "mps":
     )
 
 
+def _apple_mps_use_cpu_offload() -> bool:
+    """Keep video tensors / tracker state on CPU when using MPS to avoid unified-RAM kills."""
+    return (
+        sys.platform == "darwin"
+        and torch.backends.mps.is_available()
+        and not torch.cuda.is_available()
+    )
+
+
 def build_sam3_from_config(cfg):
     """
     Construct and return your SAM-3 model from config.
@@ -89,7 +101,12 @@ def build_sam3_3d_body_config(cfg):
     mhr_path = cfg.sam_3d_body['mhr_path']
     fov_path = cfg.sam_3d_body['fov_path']
     detector_path = cfg.sam_3d_body['detector_path']
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     model, model_cfg = load_sam_3d_body(
         cfg.sam_3d_body['ckpt_path'], device=device, mhr_path=mhr_path
     )
@@ -131,6 +148,19 @@ class OfflineApp:
     def __init__(self, config_path: str = os.path.join(ROOT, "configs", "body4d.yaml")):
         """Initialize CONFIG, SAM3_MODEL, and global RUNTIME dict."""
         self.CONFIG = OmegaConf.load(config_path)
+        if (
+            sys.platform == "darwin"
+            and torch.backends.mps.is_available()
+            and not torch.cuda.is_available()
+        ):
+            cap = 4
+            bs = int(self.CONFIG.sam_3d_body.get("batch_size", 64))
+            if bs > cap:
+                self.CONFIG.sam_3d_body.batch_size = cap
+                print(
+                    f"[memory] Apple MPS: capped sam_3d_body.batch_size {bs} -> {cap} "
+                    f"(set lower in configs/body4d.yaml if the process is still killed)."
+                )
         self.sam3_model, self.predictor = build_sam3_from_config(self.CONFIG)
         self.sam3_3d_body_model = build_sam3_3d_body_config(self.CONFIG)
 
@@ -489,6 +519,13 @@ def inference(args):
         predictor.OUTPUT_DIR = args.output_dir
         os.makedirs(predictor.OUTPUT_DIR, exist_ok=True)
 
+    offload = _apple_mps_use_cpu_offload()
+    if offload:
+        print(
+            "[memory] Apple MPS: offload_video_to_cpu + offload_state_to_cpu "
+            "(slower; reduces SIGKILL from unified memory pressure)."
+        )
+
     # human detection on the frame where human FIRST appear
     if os.path.isfile(args.input_video) and args.input_video.endswith(".mp4"):
         input_type = "video"
@@ -500,7 +537,11 @@ def inference(args):
             if len(outputs) > 0:
                 break
         
-        inference_state = predictor.predictor.init_state(video_path=args.input_video)
+        inference_state = predictor.predictor.init_state(
+            video_path=args.input_video,
+            offload_video_to_cpu=offload,
+            offload_state_to_cpu=offload,
+        )
         predictor.predictor.clear_all_points_in_video(inference_state)
         predictor.RUNTIME['inference_state'] = inference_state
         predictor.RUNTIME['out_obj_ids'] = []
@@ -531,7 +572,11 @@ def inference(args):
                 break
             starting_frame_idx += 1
 
-        inference_state = predictor.predictor.init_state(video_path=image_list)
+        inference_state = predictor.predictor.init_state(
+            video_path=image_list,
+            offload_video_to_cpu=offload,
+            offload_state_to_cpu=offload,
+        )
         predictor.predictor.clear_all_points_in_video(inference_state)
         predictor.RUNTIME['inference_state'] = inference_state
         predictor.RUNTIME['out_obj_ids'] = []

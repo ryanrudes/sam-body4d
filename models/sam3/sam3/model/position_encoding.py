@@ -7,6 +7,14 @@ import torch
 from torch import nn
 
 
+def _precompute_posenc_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 class PositionEmbeddingSine(nn.Module):
     """
     This is a more standard version of the position embedding, very similar to the one
@@ -44,7 +52,7 @@ class PositionEmbeddingSine(nn.Module):
                 (precompute_resolution // 32, precompute_resolution // 32),
             ]
             for size in precompute_sizes:
-                tensors = torch.zeros((1, 1) + size, device="cuda")
+                tensors = torch.zeros((1, 1) + size, device=_precompute_posenc_device())
                 self.forward(tensors)
                 # further clone and detach it in the cache (just to be safe)
                 self.cache[size] = self.cache[size].clone().detach()

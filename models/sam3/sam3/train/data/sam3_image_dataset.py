@@ -15,8 +15,16 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.utils.data
 import torchvision
-from decord import cpu, VideoReader
 from iopath.common.file_io import g_pathmgr
+
+try:
+    from decord import cpu, VideoReader
+
+    _HAS_DECORD = True
+except ImportError:
+    _HAS_DECORD = False
+    cpu = None  # type: ignore[assignment, misc]
+    VideoReader = None  # type: ignore[assignment, misc]
 
 from PIL import Image as PILImage
 from PIL.Image import DecompressionBombError
@@ -202,15 +210,27 @@ class CustomCocoDetectionAPI(VisionDataset):
             try:
                 if ".mp4" in path and path[-4:] == ".mp4":
                     # Going to load a video frame
+                    import cv2
+
                     video_path, frame = path.split("@")
-                    video = VideoReader(video_path, ctx=cpu(0))
-                    # Convert to PIL image
+                    frame_idx = int(frame)
+                    if _HAS_DECORD:
+                        video = VideoReader(video_path, ctx=cpu(0))
+                        arr = video[frame_idx].asnumpy()
+                    else:
+                        cap = cv2.VideoCapture(video_path)
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                        ret, bgr = cap.read()
+                        cap.release()
+                        if not ret:
+                            raise RuntimeError(
+                                f"Could not read frame {frame_idx} from {video_path}"
+                            )
+                        arr = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
                     all_images.append(
                         (
                             img_id,
-                            torchvision.transforms.ToPILImage()(
-                                video[int(frame)].asnumpy()
-                            ),
+                            torchvision.transforms.ToPILImage()(arr),
                         )
                     )
                 else:

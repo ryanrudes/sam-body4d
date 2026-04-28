@@ -7,6 +7,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, 'models', 'sam_3d_body'))
 sys.path.append(os.path.join(current_dir, 'models', 'diffusion_vas'))
 
+# PyOpenGL defaults to EGL on some installs; pyrender needs a macOS-capable backend.
+if sys.platform == "darwin":
+    os.environ.setdefault("PYOPENGL_PLATFORM", "pyglet")
+
 import uuid
 from datetime import datetime
 
@@ -57,6 +61,16 @@ elif device.type == "mps":
         "See e.g. https://github.com/pytorch/pytorch/issues/84936 for a discussion."
     )
 
+
+def _apple_mps_use_cpu_offload() -> bool:
+    """Keep video tensors / tracker state on CPU when using MPS to avoid unified-RAM kills."""
+    return (
+        sys.platform == "darwin"
+        and torch.backends.mps.is_available()
+        and not torch.cuda.is_available()
+    )
+
+
 # ===============================
 # Global runtime objects
 # ===============================
@@ -86,7 +100,12 @@ def build_sam3_from_config(cfg):
 def build_sam3_3d_body_config(cfg):
     mhr_path = cfg.sam_3d_body['mhr_path']
     fov_path = cfg.sam_3d_body['fov_path']
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     model, model_cfg = load_sam_3d_body(
         cfg.sam_3d_body['ckpt_path'], device=device, mhr_path=mhr_path
     )
@@ -127,6 +146,20 @@ def init_runtime(config_path: str = os.path.join(ROOT, "configs", "body4d.yaml")
     global CONFIG, sam3_model, predictor, inference_state, sam3_3d_body_model, RUNTIME, OUTPUT_DIR, pipeline_mask \
         , pipeline_rgb, depth_model, max_occ_len, generator
     CONFIG = OmegaConf.load(config_path)
+    # Apple Silicon: unified memory spikes if batch_size stays at server defaults (e.g. 64).
+    if (
+        sys.platform == "darwin"
+        and torch.backends.mps.is_available()
+        and not torch.cuda.is_available()
+    ):
+        cap = 4
+        bs = int(CONFIG.sam_3d_body.get("batch_size", 64))
+        if bs > cap:
+            CONFIG.sam_3d_body.batch_size = cap
+            print(
+                f"[memory] Apple MPS: capped sam_3d_body.batch_size {bs} -> {cap} "
+                f"(set lower in configs/body4d.yaml if the app is still killed)."
+            )
     sam3_model, predictor = build_sam3_from_config(CONFIG)
     sam3_3d_body_model = build_sam3_3d_body_config(CONFIG)
 
@@ -151,7 +184,7 @@ EXAMPLE_1 = os.path.join(ROOT, "assets", "examples", "example1.mp4")
 EXAMPLE_2 = os.path.join(ROOT, "assets", "examples", "example2.mp4")
 EXAMPLE_3 = os.path.join(ROOT, "assets", "examples", "example3.mp4")
 
-SUPPORTED_EXTS = {".mp4",}
+SUPPORTED_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 # ===============================
 # Video utilities
@@ -236,7 +269,17 @@ def prepare_video(path: str):
     total_text = f"{int(dur // 60):02d}:{int(dur % 60):02d}"
     time_text = f"00:00 / {total_text}"
 
-    inference_state = predictor.init_state(video_path=path)
+    offload = _apple_mps_use_cpu_offload()
+    if offload:
+        print(
+            "[memory] Apple MPS: offload_video_to_cpu + offload_state_to_cpu for this session "
+            "(slower; reduces SIGKILL from unified memory pressure)."
+        )
+    inference_state = predictor.init_state(
+        video_path=path,
+        offload_video_to_cpu=offload,
+        offload_state_to_cpu=offload,
+    )
     predictor.clear_all_points_in_video(inference_state)
     RUNTIME['inference_state'] = inference_state
     RUNTIME['clicks'] = {}

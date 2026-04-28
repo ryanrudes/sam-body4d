@@ -12,9 +12,16 @@ class HumanDetector:
         self.device = device
 
         if name == "vitdet":
-            print("########### Using human detector: ViTDet...")
-            self.detector = load_detectron2_vitdet(**kwargs)
-            self.detector_func = run_detectron2_vitdet
+            try:
+                self.detector = load_detectron2_vitdet(**kwargs)
+                self.detector_func = run_detectron2_vitdet
+                print("########### Using human detector: ViTDet (detectron2)...")
+            except ImportError:
+                print(
+                    "########### detectron2 not available; using torchvision Faster R-CNN (person) fallback..."
+                )
+                self.detector = load_torchvision_person_detector(self.device)
+                self.detector_func = run_torchvision_person_detector
 
             self.detector = self.detector.to(self.device)
             self.detector.eval()
@@ -23,6 +30,58 @@ class HumanDetector:
 
     def run_human_detection(self, img, **kwargs):
         return self.detector_func(self.detector, img, **kwargs)
+
+
+def load_torchvision_person_detector(device):
+    """COCO-pretrained Faster R-CNN; person class id = 1."""
+    from torchvision.models.detection import (
+        fasterrcnn_resnet50_fpn,
+        FasterRCNN_ResNet50_FPN_Weights,
+    )
+
+    weights = FasterRCNN_ResNet50_FPN_Weights.DEFAULT
+    model = fasterrcnn_resnet50_fpn(weights=weights)
+    model.to(device)
+    model.eval()
+    return model
+
+
+def run_torchvision_person_detector(
+    detector,
+    img,
+    det_cat_id: int = 0,
+    bbox_thr: float = 0.5,
+    nms_thr: float = 0.3,
+    default_to_full_image: bool = True,
+):
+    """Match ViTDet output: xyxy boxes in original image coordinates (numpy)."""
+    import cv2
+    import torch
+
+    height, width = img.shape[:2]
+    # ViTDet uses category 0 for person; COCO in torchvision uses 1.
+    coco_person_id = 1 if det_cat_id == 0 else det_cat_id
+
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    t = torch.from_numpy(img_rgb.astype("float32") / 255.0).permute(2, 0, 1)
+    t = t.to(next(detector.parameters()).device)
+    with torch.no_grad():
+        det_out = detector([t])[0]
+
+    labels = det_out["labels"]
+    scores = det_out["scores"]
+    boxes = det_out["boxes"]
+    valid = (labels == coco_person_id) & (scores > bbox_thr)
+    if valid.sum() == 0 and default_to_full_image:
+        boxes_np = np.array([0, 0, width, height]).reshape(1, 4)
+    else:
+        boxes_np = boxes[valid].cpu().numpy()
+
+    sorted_indices = np.lexsort(
+        (boxes_np[:, 3], boxes_np[:, 2], boxes_np[:, 1], boxes_np[:, 0])
+    )
+    boxes_np = boxes_np[sorted_indices]
+    return boxes_np
 
 
 def load_detectron2_vitdet(path=""):

@@ -277,8 +277,14 @@ class TransformerDecoder(nn.Module):
 
             if resolution is not None and stride is not None:
                 feat_size = resolution // stride
+                if torch.cuda.is_available():
+                    _dev = "cuda"
+                elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    _dev = "mps"
+                else:
+                    _dev = "cpu"
                 coords_h, coords_w = self._get_coords(
-                    feat_size, feat_size, device="cuda"
+                    feat_size, feat_size, device=_dev
                 )
                 self.compilable_cord_cache = (coords_h, coords_w)
                 self.compilable_stored_size = (feat_size, feat_size)

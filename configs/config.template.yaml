@@ -1,8 +1,9 @@
 # ============================================================================
 # Configuration Template for SAM-Body4D
 #
-# This is a runtime config used by app.py / offline_app.py.
-# Point `ckpt_root` at your checkpoint directory (see scripts/setup.py).
+# This is a runtime config template used by the setup script.
+# The setup script will replace `${CKPT_ROOT}` with the user-specified
+# checkpoint directory and generate `configs/body4d.yaml`.
 #
 # NOTE:
 #   All checkpoint paths below are relative to `paths.ckpt_root`.
@@ -10,8 +11,8 @@
 # ============================================================================
 
 paths:
-  # Global root directory for all checkpoints
-  ckpt_root: "./checkpoints"
+  # Global root directory for all checkpoints (filled by setup script)
+  ckpt_root: "${CKPT_ROOT}"
 
 # ---------------------------------------------------------------------------
 # SAM3
@@ -31,8 +32,8 @@ sam_3d_body:
   # MoGe (surface normal / FoV prior)
   fov_path: ${paths.ckpt_root}/moge-2-vitl-normal/model.pt
 
-  # Number of frames processed in parallel (use 4–8 on Apple Silicon if you hit memory limits)
-  batch_size: 8
+  # Number of frames processed in parallel
+  batch_size: 64
 
   # Optional external detector / segmentor (leave empty to use defaults)
   detector_path: ""

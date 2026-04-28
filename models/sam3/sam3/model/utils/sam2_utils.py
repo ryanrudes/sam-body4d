@@ -13,6 +13,14 @@ from PIL import Image
 from tqdm import tqdm
 
 
+def default_compute_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def _load_img_as_tensor(img_path, image_size):
     img_pil = Image.open(img_path)
     img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
@@ -100,15 +108,18 @@ def load_video_frames(
     img_mean=(0.5, 0.5, 0.5),
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
-    compute_device=torch.device("cuda"),
+    compute_device=None,
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
     the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
     """
+    if compute_device is None:
+        compute_device = default_compute_device()
     is_bytes = isinstance(video_path, bytes)
     is_str = isinstance(video_path, str)
-    is_mp4_path = is_str and os.path.splitext(video_path)[-1] in [".mp4", ".MP4"]
+    _vext = os.path.splitext(video_path)[-1].lower() if is_str else ""
+    is_mp4_path = is_str and _vext in (".mp4", ".mov", ".avi", ".mkv", ".webm")
     if is_bytes or is_mp4_path:
         return load_video_frames_from_video_file(
             video_path=video_path,
@@ -151,7 +162,7 @@ def load_video_frames_from_jpg_images(
     img_mean=(0.5, 0.5, 0.5),
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
-    compute_device=torch.device("cuda"),
+    compute_device=None,
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -161,6 +172,8 @@ def load_video_frames_from_jpg_images(
 
     You can load a frame asynchronously by setting `async_loading_frames` to `True`.
     """
+    if compute_device is None:
+        compute_device = default_compute_device()
     if isinstance(video_path, str) and os.path.isdir(video_path):
         jpg_folder = video_path
     else:
@@ -218,7 +231,7 @@ def load_video_frames_from_jpg_image_list(
     img_mean=(0.5, 0.5, 0.5),
     img_std=(0.5, 0.5, 0.5),
     async_loading_frames=False,
-    compute_device=torch.device("cuda"),
+    compute_device=None,
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -228,6 +241,8 @@ def load_video_frames_from_jpg_image_list(
 
     You can load a frame asynchronously by setting `async_loading_frames` to `True`.
     """
+    if compute_device is None:
+        compute_device = default_compute_device()
     jpg_folder = os.path.dirname(video_path[0])
     frame_names = [os.path.basename(f) for f in video_path]
 
@@ -263,23 +278,73 @@ def load_video_frames_from_jpg_image_list(
     return images, video_height, video_width
 
 
+def _load_video_frames_opencv(
+    video_path,
+    image_size,
+    offload_video_to_cpu,
+    img_mean,
+    img_std,
+    compute_device,
+):
+    """Load all frames with OpenCV (macOS / platforms without decord)."""
+    import cv2
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"OpenCV could not open video: {video_path}")
+    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    images = []
+    while True:
+        ret, bgr = cap.read()
+        if not ret:
+            break
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        if image_size is not None:
+            rgb = cv2.resize(rgb, (image_size, image_size), interpolation=cv2.INTER_AREA)
+        t = torch.from_numpy(rgb).permute(2, 0, 1)
+        images.append(t)
+    cap.release()
+    if not images:
+        raise RuntimeError(f"No frames read from video: {video_path}")
+    images = torch.stack(images, dim=0).float() / 255.0
+    if not offload_video_to_cpu:
+        images = images.to(compute_device)
+        img_mean = img_mean.to(compute_device)
+        img_std = img_std.to(compute_device)
+    images -= img_mean
+    images /= img_std
+    return images, video_height, video_width
+
+
 def load_video_frames_from_video_file(
     video_path,
     image_size,
     offload_video_to_cpu,
     img_mean=(0.5, 0.5, 0.5),
     img_std=(0.5, 0.5, 0.5),
-    compute_device=torch.device("cuda"),
+    compute_device=None,
 ):
-    """Load the video frames from a video file."""
-    import decord
+    """Load the video frames from a video file (decord if available, else OpenCV)."""
+    if compute_device is None:
+        compute_device = default_compute_device()
+    img_mean_t = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
+    img_std_t = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
 
-    img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
-    img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
-    # Get the original video height and width
+    try:
+        import decord
+    except ImportError:
+        return _load_video_frames_opencv(
+            video_path,
+            image_size,
+            offload_video_to_cpu,
+            img_mean_t,
+            img_std_t,
+            compute_device,
+        )
+
     decord.bridge.set_bridge("torch")
     video_height, video_width, _ = decord.VideoReader(video_path).next().shape
-    # Iterate over all frames in the video
     images = []
     for frame in decord.VideoReader(video_path, width=image_size, height=image_size):
         images.append(frame.permute(2, 0, 1))
@@ -287,9 +352,8 @@ def load_video_frames_from_video_file(
     images = torch.stack(images, dim=0).float() / 255.0
     if not offload_video_to_cpu:
         images = images.to(compute_device)
-        img_mean = img_mean.to(compute_device)
-        img_std = img_std.to(compute_device)
-    # normalize by mean and std
-    images -= img_mean
-    images /= img_std
+        img_mean_t = img_mean_t.to(compute_device)
+        img_std_t = img_std_t.to(compute_device)
+    images -= img_mean_t
+    images /= img_std_t
     return images, video_height, video_width

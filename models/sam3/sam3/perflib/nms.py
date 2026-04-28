@@ -63,10 +63,12 @@ def generic_nms(
     if ious.is_cuda:
         if GENERIC_NMS_AVAILABLE:
             return generic_nms_cuda(ious, scores, iou_threshold, use_iou_matrix=True)
-        else:
+        try:
             from sam3.perflib.triton.nms import nms_triton
 
             return nms_triton(ious, scores, iou_threshold)
+        except ImportError:
+            pass
 
     return generic_nms_cpu(ious, scores, iou_threshold)
 

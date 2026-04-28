@@ -7,7 +7,7 @@ from scipy.ndimage import binary_dilation
 import matplotlib.pyplot as plt
 from PIL import Image
 
-
+import torch
 import torch.utils.checkpoint
 from torchvision import transforms
 
@@ -17,21 +17,50 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+def _diffusion_vas_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _diffusion_vas_pipeline_dtype(device: str):
+    # FP16 saves VRAM on CUDA; MPS/CPU are more reliable in FP32 for these pipelines.
+    return torch.float16 if device == "cuda" else torch.float32
+
+
+def _install_diffusion_pipeline_offload(pipeline, device: str) -> None:
+    """
+    Avoid `.to(mps)` / `.to(cuda)` on the whole pipeline: that materializes every
+    component on the accelerator at once and blows unified memory on Mac.
+    CPU offload moves one component at a time (same idea as the original CUDA path).
+    """
+    if device in ("cuda", "mps"):
+        pipeline.enable_model_cpu_offload(device=device)
+    else:
+        pipeline.to(device)
+
+
 def init_amodal_segmentation_model(model_path_mask):
+    device = _diffusion_vas_device()
+    dtype = _diffusion_vas_pipeline_dtype(device)
     pipeline_mask = DiffusionVASPipeline.from_pretrained(
-        model_path_mask, dtype=torch.float16
-    ).to("cuda")
-    pipeline_mask.enable_model_cpu_offload()
+        model_path_mask, dtype=dtype
+    )
+    _install_diffusion_pipeline_offload(pipeline_mask, device)
     pipeline_mask.set_progress_bar_config(disable=True)
 
     return pipeline_mask
 
 
 def init_rgb_model(model_path_rgb):
+    device = _diffusion_vas_device()
+    dtype = _diffusion_vas_pipeline_dtype(device)
     pipeline_rgb = DiffusionVASPipeline.from_pretrained(
-        model_path_rgb, dtype=torch.float16
-    ).to("cuda")
-    pipeline_rgb.enable_model_cpu_offload()
+        model_path_rgb, dtype=dtype
+    )
+    _install_diffusion_pipeline_offload(pipeline_rgb, device)
     pipeline_rgb.set_progress_bar_config(disable=True)
 
     return pipeline_rgb
@@ -48,9 +77,11 @@ def init_depth_model(model_path_depth, depth_encoder):
         'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
 
-    depth_model = DepthAnythingV2(**depth_model_configs[depth_encoder]).to('cuda')
-    depth_model.load_state_dict(
-        torch.load(model_path_depth))
+    device = _diffusion_vas_device()
+    # Load weights on CPU first to avoid a large transient duplicate on MPS/CUDA.
+    depth_model = DepthAnythingV2(**depth_model_configs[depth_encoder])
+    depth_model.load_state_dict(torch.load(model_path_depth, map_location="cpu"))
+    depth_model.to(device)
     depth_model.eval()
 
     return depth_model
